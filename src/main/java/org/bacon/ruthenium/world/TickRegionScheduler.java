@@ -3,10 +3,6 @@ package org.bacon.ruthenium.world;
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool;
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool.SchedulableTick;
 import ca.spottedleaf.concurrentutil.util.TimeUtil;
-import it.unimi.dsi.fastutil.longs.LongIterator;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -23,10 +19,13 @@ import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.region.RegionTaskQueue;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
+import org.bacon.ruthenium.world.RegionChunkTickAccess;
+import org.bacon.ruthenium.world.RegionizedServerWorld;
 
 /**
  * Port of Folia's TickRegionScheduler adapted for Ruthenium.
@@ -34,11 +33,9 @@ import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
 public final class TickRegionScheduler {
 
     private static final Logger LOGGER = LogManager.getLogger(TickRegionScheduler.class);
+    private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final TickRegionScheduler INSTANCE = new TickRegionScheduler();
     private static final long TICK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L) / 20L;
-    private static final AtomicInteger THREAD_ID = new AtomicInteger();
-
-    private static final MethodHandle TICK_CHUNK;
 
     private final SchedulerThreadPool scheduler;
     private final AtomicBoolean halted = new AtomicBoolean();
@@ -48,17 +45,6 @@ public final class TickRegionScheduler {
     private final ThreadLocal<RegionScheduleHandle> currentHandle = new ThreadLocal<>();
 
     static {
-        MethodHandle handle;
-        try {
-            final MethodHandles.Lookup lookup = MethodHandles.lookup();
-            handle = lookup.findVirtual(ServerWorld.class, "tickChunk",
-                MethodType.methodType(void.class, WorldChunk.class, int.class));
-        } catch (final ReflectiveOperationException ex) {
-            handle = null;
-            LOGGER.error("Unable to resolve ServerWorld#tickChunk; region ticking will fall back to vanilla execution", ex);
-        }
-        TICK_CHUNK = handle;
-
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 TickRegionScheduler.getInstance().shutdown();
@@ -103,7 +89,7 @@ public final class TickRegionScheduler {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
         requireRegionizer(world);
-        return TICK_CHUNK != null;
+        return true;
     }
 
     public void scheduleRegion(final RegionScheduleHandle handle) {
@@ -136,7 +122,7 @@ public final class TickRegionScheduler {
     }
 
     void enterRegionContext(final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
-                             final ServerWorld world, final RegionScheduleHandle handle) {
+                            final ServerWorld world, final RegionScheduleHandle handle) {
         this.currentRegion.set(region);
         this.currentWorld.set(world);
         this.currentHandle.set(handle);
@@ -159,11 +145,14 @@ public final class TickRegionScheduler {
         final int randomTickSpeed = server.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED);
         final ServerChunkManager chunkManager = world.getChunkManager();
 
-        final LongIterator iterator = data.getChunks().iterator();
-        while (iterator.hasNext() && guard.getAsBoolean()) {
-            final long chunkKey = iterator.nextLong();
+        final long[] chunkSnapshot = data.getChunks().toLongArray();
+        for (int i = 0; i < chunkSnapshot.length && guard.getAsBoolean(); ++i) {
+            final long chunkKey = chunkSnapshot[i];
             final int chunkX = RegionTickData.decodeChunkX(chunkKey);
             final int chunkZ = RegionTickData.decodeChunkZ(chunkKey);
+            if (!data.containsChunk(chunkX, chunkZ)) {
+                continue;
+            }
             final Chunk chunk = chunkManager.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
             if (!(chunk instanceof WorldChunk worldChunk)) {
                 continue;
@@ -171,9 +160,7 @@ public final class TickRegionScheduler {
 
             ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
             try {
-                if (TICK_CHUNK != null) {
-                    TICK_CHUNK.invoke(world, worldChunk, randomTickSpeed);
-                }
+                ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
             } finally {

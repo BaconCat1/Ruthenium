@@ -5,7 +5,9 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "ruthenium-refmap.json",
   "mixins": [
-    "ServerWorldMixin"
+    "ServerWorldMixin",
+    "accessor.ServerWorldAccessor",
+    "CheckedRandomMixin"
   ],
   "injectors": {
     "defaultRequire": 1
