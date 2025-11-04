@@ -1,0 +1,88 @@
+package org.bacon.ruthenium.mixin;
+
+import java.util.function.BooleanSupplier;
+
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.server.world.ServerWorld;
+import net.minecraft.world.World;
+import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.region.RegionTickData;
+import org.bacon.ruthenium.region.ThreadedRegionizer;
+import org.bacon.ruthenium.world.RegionChunkTickAccess;
+import org.bacon.ruthenium.world.RegionTickScheduler;
+import org.bacon.ruthenium.world.RegionizedServerWorld;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import net.minecraft.world.chunk.WorldChunk;
+
+/**
+ * Injects lifecycle hooks that coordinate Ruthenium regions with the Minecraft world tick.
+ */
+@Mixin(ServerWorld.class)
+public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionChunkTickAccess {
+
+    @Shadow
+    public abstract RegistryKey<World> getRegistryKey();
+
+    @Unique
+    private ThreadedRegionizer<RegionTickData> ruthenium$regionizer;
+
+    @Unique
+    private boolean ruthenium$skipVanillaChunkTick;
+
+    @Unique
+    private int ruthenium$regionChunkDepth;
+
+    @Override
+    public ThreadedRegionizer<RegionTickData> ruthenium$getRegionizer() {
+        if (this.ruthenium$regionizer == null) {
+            this.ruthenium$regionizer = Ruthenium.createRegionizer();
+            Ruthenium.getLogger().info("Created regionizer for world {}", this.getRegistryKey().getValue());
+        }
+        return this.ruthenium$regionizer;
+    }
+
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        final boolean replaced = RegionTickScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
+        this.ruthenium$skipVanillaChunkTick = replaced;
+    }
+
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void ruthenium$finishRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        this.ruthenium$skipVanillaChunkTick = false;
+    }
+
+    @Inject(method = "tickChunk", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$guardChunkTick(final WorldChunk chunk, final int randomTickSpeed, final CallbackInfo ci) {
+        if (this.ruthenium$skipVanillaChunkTick && this.ruthenium$regionChunkDepth == 0) {
+            ci.cancel();
+            return;
+        }
+        this.ruthenium$regionChunkDepth++;
+    }
+
+    @Inject(method = "tickChunk", at = @At("RETURN"))
+    private void ruthenium$finishChunkTick(final WorldChunk chunk, final int randomTickSpeed, final CallbackInfo ci) {
+        if (this.ruthenium$regionChunkDepth > 0) {
+            this.ruthenium$regionChunkDepth--;
+        }
+    }
+
+    @Override
+    public void ruthenium$pushRegionChunkTick() {
+        this.ruthenium$regionChunkDepth++;
+    }
+
+    @Override
+    public void ruthenium$popRegionChunkTick() {
+        if (this.ruthenium$regionChunkDepth > 0) {
+            this.ruthenium$regionChunkDepth--;
+        }
+    }
+}
