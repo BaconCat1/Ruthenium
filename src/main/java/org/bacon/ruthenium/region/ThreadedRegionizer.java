@@ -15,7 +15,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -229,12 +228,28 @@ public final class ThreadedRegionizer<D> {
         }
     }
 
+    /**
+     * Attempts to locate a region by its identifier.
+     *
+     * @param regionId identifier assigned to the region when it was created
+     * @return the region if it is still tracked, otherwise {@code null}
+     */
+    public ThreadedRegion<D> getRegionById(final long regionId) {
+        this.lock.lock();
+        try {
+            return this.regionIndex.get(regionId);
+        } finally {
+            this.lock.unlock();
+        }
+    }
+
     private void processPendingMerges(final ThreadedRegion<D> region) {
         for (final ThreadedRegion<D> incoming : region.drainPendingIncoming()) {
-            if (incoming.getState() == RegionState.DEAD) {
+            final ThreadedRegion<D> trackedIncoming = this.regionIndex.get(incoming.getId());
+            if (trackedIncoming == null || trackedIncoming.getState() == RegionState.DEAD) {
                 continue;
             }
-            mergeRegions(incoming, region);
+            mergeRegions(trackedIncoming, region);
         }
     }
 
@@ -288,7 +303,7 @@ public final class ThreadedRegionizer<D> {
         }
         final List<RegionSection> toRemove = region.getSections().values().stream()
             .filter(RegionSection::isDead)
-            .collect(Collectors.toList());
+            .toList();
         for (final RegionSection section : toRemove) {
             region.removeSection(section);
             this.sections.remove(section.getPosition());
@@ -317,7 +332,7 @@ public final class ThreadedRegionizer<D> {
             return;
         }
         LOGGER.debug("Splitting region {} into {} components", region, components.size());
-        components.remove(0); // keep the first component in the existing region
+        components.removeFirst(); // keep the first component in the existing region
         for (final Set<RegionSection> subset : components) {
             final D data = this.dataController.splitData(region, region.getData(), subset);
             final ThreadedRegion<D> newRegion = createRegion(Collections.emptyList(), RegionState.READY, data);
