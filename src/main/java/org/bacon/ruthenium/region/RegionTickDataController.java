@@ -1,5 +1,6 @@
 package org.bacon.ruthenium.region;
 
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -9,21 +10,26 @@ public final class RegionTickDataController implements RegionDataController<Regi
 
     @Override
     public RegionTickData createData(final ThreadedRegion<RegionTickData> region) {
+        Objects.requireNonNull(region, "region");
         return new RegionTickData();
     }
 
     @Override
     public void mergeData(final ThreadedRegion<RegionTickData> intoRegion, final RegionTickData intoData,
                           final ThreadedRegion<RegionTickData> fromRegion, final RegionTickData fromData) {
-        final long currentOffset = fromData.getCurrentTick() - intoData.getCurrentTick();
-        final long redstoneOffset = fromData.getRedstoneTick() - intoData.getRedstoneTick();
-        fromData.applyOffset(currentOffset, redstoneOffset);
+        Objects.requireNonNull(intoRegion, "intoRegion");
+        Objects.requireNonNull(intoData, "intoData");
+        Objects.requireNonNull(fromRegion, "fromRegion");
+        Objects.requireNonNull(fromData, "fromData");
         intoData.absorb(fromData);
     }
 
     @Override
     public RegionTickData splitData(final ThreadedRegion<RegionTickData> parentRegion, final RegionTickData parentData,
                                     final Set<RegionSection> newRegionSections) {
+        Objects.requireNonNull(parentRegion, "parentRegion");
+        Objects.requireNonNull(parentData, "parentData");
+        Objects.requireNonNull(newRegionSections, "newRegionSections");
         return parentData.copy();
     }
 }
