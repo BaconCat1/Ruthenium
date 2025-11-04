@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "ruthenium",
+  "version": "${version}",
+  "name": "Ruthenium",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "Apache-2.0",
+  "icon": "assets/ruthenium/icon.png",
+  "environment": "server",
+  "entrypoints": {
+    "fabric-datagen": [
+      "org.bacon.ruthenium.client.RutheniumDataGenerator"
+    ],
+    "main": [
+      "org.bacon.ruthenium.Ruthenium"
+    ]
+  },
+  "mixins": [
+    "ruthenium.mixins.json",
+    {
+      "config": "ruthenium.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
