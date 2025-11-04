@@ -1,20 +1,40 @@
 package org.bacon.ruthenium.region;
 
-import java.util.HashSet;
-import java.util.Set;
+import it.unimi.dsi.fastutil.longs.Long2ReferenceMap;
+import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import org.bacon.ruthenium.util.CoordinateUtil;
+import org.bacon.ruthenium.world.TickRegionScheduler;
 
 /**
  * Simple region data container that stores per-region tick counters.
  */
-public final class RegionTickData {
+public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionData<RegionTickData, RegionTickData.RegionSectionData> {
 
+    private final TickRegionScheduler scheduler;
+    private ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region;
+    private TickRegionScheduler.RegionScheduleHandle scheduleHandle;
     private long currentTick;
     private long redstoneTick;
     private final LongSet chunks = new LongOpenHashSet();
     private final RegionTaskQueue taskQueue = new RegionTaskQueue();
+
+    public RegionTickData() {
+        this(TickRegionScheduler.getInstance());
+    }
+
+    private RegionTickData(final TickRegionScheduler scheduler) {
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+    }
 
     /**
      * @return the current tick counter for the region.
@@ -73,12 +93,37 @@ public final class RegionTickData {
      * @return the copy
      */
     public RegionTickData copy() {
-        final RegionTickData copy = new RegionTickData();
+        final RegionTickData copy = new RegionTickData(this.scheduler);
         copy.currentTick = this.currentTick;
         copy.redstoneTick = this.redstoneTick;
         copy.chunks.addAll(this.chunks);
         this.taskQueue.copyInto(copy.taskQueue);
         return copy;
+    }
+
+    public void attachRegion(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region,
+                              final TickRegionScheduler scheduler) {
+        Objects.requireNonNull(region, "region");
+        Objects.requireNonNull(scheduler, "scheduler");
+        if (scheduler != this.scheduler) {
+            throw new IllegalStateException("Mismatched scheduler instance");
+        }
+        this.region = region;
+        this.scheduleHandle = scheduler.createHandle(this, region, this.scheduleHandle);
+    }
+
+    public TickRegionScheduler.RegionScheduleHandle getScheduleHandle() {
+        if (this.scheduleHandle == null) {
+            throw new IllegalStateException("Region schedule handle has not been initialised");
+        }
+        return this.scheduleHandle;
+    }
+
+    public void refreshScheduleHandle() {
+        if (this.region == null) {
+            return;
+        }
+        this.scheduleHandle = this.scheduler.createHandle(this, this.region, this.scheduleHandle);
     }
 
     public void addChunk(final int chunkX, final int chunkZ) {
@@ -104,33 +149,85 @@ public final class RegionTickData {
         return this.taskQueue;
     }
 
-    public RegionTickData splitForSections(final Set<RegionSection> sections, final int sectionChunkShift) {
-        final RegionTickData child = new RegionTickData();
-        child.currentTick = this.currentTick;
-        child.redstoneTick = this.redstoneTick;
+    @Override
+    public void split(final ThreadedRegionizer<RegionTickData, RegionSectionData> regioniser,
+                      final Long2ReferenceOpenHashMap<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> into,
+                      final ReferenceOpenHashSet<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> regions) {
+        final int sectionShift = regioniser.sectionChunkShift;
 
-        final Set<RegionSectionPos> sectionPositions = new HashSet<>();
-        for (final RegionSection section : sections) {
-            sectionPositions.add(section.getPosition());
+        final Map<Long, Set<RegionSectionPos>> sectionsByRegion = new HashMap<>();
+        for (final Long2ReferenceMap.Entry<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> entry : into.long2ReferenceEntrySet()) {
+            final long sectionKey = entry.getLongKey();
+            final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region = entry.getValue();
+            if (region == null) {
+                continue;
+            }
+            sectionsByRegion.computeIfAbsent(region.id, ignored -> new HashSet<>())
+                .add(new RegionSectionPos(CoordinateUtil.getChunkX(sectionKey), CoordinateUtil.getChunkZ(sectionKey)));
+        }
+
+        final Long2ReferenceOpenHashMap<LongArrayList> chunksByRegion = new Long2ReferenceOpenHashMap<>(regions.size());
+        for (final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region : regions) {
+            chunksByRegion.put(region.id, new LongArrayList());
+            final RegionTickData targetData = region.getData();
+            targetData.currentTick = this.currentTick;
+            targetData.redstoneTick = this.redstoneTick;
+            if (this.scheduleHandle != null && targetData.scheduleHandle != null) {
+                targetData.scheduleHandle.copyStateFrom(this.scheduleHandle);
+            }
         }
 
         final LongIterator iterator = this.chunks.iterator();
         while (iterator.hasNext()) {
             final long chunkKey = iterator.nextLong();
-            final int chunkX = decodeChunkX(chunkKey);
-            final int chunkZ = decodeChunkZ(chunkKey);
-            final RegionSectionPos pos = RegionSectionPos.fromChunk(chunkX, chunkZ, sectionChunkShift);
-            if (sectionPositions.contains(pos)) {
+            final int sectionX = CoordinateUtil.getChunkX(chunkKey) >> sectionShift;
+            final int sectionZ = CoordinateUtil.getChunkZ(chunkKey) >> sectionShift;
+            final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+            final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> targetRegion = into.get(sectionKey);
+            if (targetRegion == null) {
+                continue;
+            }
+            final LongArrayList list = chunksByRegion.get(targetRegion.id);
+            if (list != null) {
+                list.add(chunkKey);
                 iterator.remove();
-                child.chunks.add(chunkKey);
             }
         }
 
-        final RegionTaskQueue transferredTasks = this.taskQueue.splitForSections(sectionPositions, sectionChunkShift);
-        child.taskQueue.absorb(transferredTasks);
+        for (final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region : regions) {
+            final RegionTickData targetData = region.getData();
+            final LongArrayList movedChunks = chunksByRegion.get(region.id);
+            if (movedChunks != null) {
+                for (int i = 0, len = movedChunks.size(); i < len; ++i) {
+                    targetData.chunks.add(movedChunks.getLong(i));
+                }
+            }
 
-        return child;
+            final Set<RegionSectionPos> positions = sectionsByRegion.get(region.id);
+            if (positions != null && !positions.isEmpty()) {
+                final RegionTaskQueue transferred = this.taskQueue.splitForSections(positions, sectionShift);
+                targetData.taskQueue.absorb(transferred);
+            }
+        }
+
+        this.taskQueue.clear();
+        this.chunks.clear();
     }
+
+    @Override
+    public void mergeInto(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> into) {
+        final RegionTickData targetData = into.getData();
+        targetData.currentTick = Math.max(targetData.currentTick, this.currentTick);
+        targetData.redstoneTick = Math.max(targetData.redstoneTick, this.redstoneTick);
+        targetData.chunks.addAll(this.chunks);
+        this.chunks.clear();
+        targetData.taskQueue.absorb(this.taskQueue);
+        if (this.scheduleHandle != null && targetData.scheduleHandle != null) {
+            targetData.scheduleHandle.copyStateFrom(this.scheduleHandle);
+        }
+    }
+
+    public static final class RegionSectionData implements ThreadedRegionizer.ThreadedRegionSectionData {}
 
     public static int decodeChunkX(final long chunkKey) {
         return (int)(chunkKey & 0xFFFFFFFFL);

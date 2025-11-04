@@ -58,6 +58,15 @@ public final class RegionTaskQueue {
     }
 
     /**
+     * Removes all queued tasks.
+     */
+    public void clear() {
+        synchronized (this) {
+            this.chunkTasks.clear();
+        }
+    }
+
+    /**
      * Checks whether a task targeting the provided chunk is currently queued.
      * Primarily intended for unit tests.
      *

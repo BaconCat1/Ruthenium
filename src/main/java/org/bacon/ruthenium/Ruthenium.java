@@ -7,11 +7,12 @@ import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.region.RegionTickData;
-import org.bacon.ruthenium.region.RegionTickDataController;
 import org.bacon.ruthenium.region.RegionizerConfig;
-import org.bacon.ruthenium.region.ThreadedRegion;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
+import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
+import org.bacon.ruthenium.region.TickRegions;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
+import org.bacon.ruthenium.world.TickRegionScheduler;
 
 /**
  * Fabric entrypoint that exposes the regionizer implementation for use by the rest of the mod.
@@ -31,26 +32,26 @@ public final class Ruthenium implements ModInitializer {
             .sectionChunkShift(4)
             .build();
 
-    private static final ThreadedRegionizer<RegionTickData> REGIONIZER =
-        new ThreadedRegionizer<>(DEFAULT_CONFIG, new RegionTickDataController());
-
     @Override
     public void onInitialize() {
-        LOGGER.info("Initializing Ruthenium regionizer (section shift={}, merge radius={})",
-            REGIONIZER.getConfig().getSectionChunkShift(), REGIONIZER.getConfig().getMergeRadius());
+        LOGGER.info("Initializing Ruthenium regionizer defaults (section shift={}, merge radius={})",
+            DEFAULT_CONFIG.getSectionChunkShift(), DEFAULT_CONFIG.getMergeRadius());
 
         ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
-            final ThreadedRegionizer<RegionTickData> regionizer = requireRegionizer(world);
+            final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
             final ChunkPos pos = chunk.getPos();
-            final ThreadedRegion<RegionTickData> region = regionizer.addChunk(pos.x, pos.z);
-            region.getData().addChunk(pos.x, pos.z);
-            LOGGER.debug("Registered chunk {} for region {} in world {}", pos, region.getId(), world.getRegistryKey().getValue());
+            regionizer.addChunk(pos.x, pos.z);
+            final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(pos.x, pos.z);
+            if (region != null) {
+                region.getData().addChunk(pos.x, pos.z);
+                LOGGER.debug("Registered chunk {} for region {} in world {}", pos, region.id, world.getRegistryKey().getValue());
+            }
         });
 
         ServerChunkEvents.CHUNK_UNLOAD.register((world, chunk) -> {
-            final ThreadedRegionizer<RegionTickData> regionizer = requireRegionizer(world);
+            final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
             final ChunkPos pos = chunk.getPos();
-            final ThreadedRegion<RegionTickData> region = regionizer.getRegionForChunk(pos.x, pos.z);
+            final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(pos.x, pos.z);
             if (region != null) {
                 region.getData().removeChunk(pos.x, pos.z);
             }
@@ -60,21 +61,12 @@ public final class Ruthenium implements ModInitializer {
     }
 
     /**
-     * Provides access to the global regionizer instance.
-     *
-     * @return the regionizer
-     */
-    public static ThreadedRegionizer<RegionTickData> getRegionizer() {
-        return REGIONIZER;
-    }
-
-    /**
      * Creates a new regionizer configured with Ruthenium defaults.
      *
      * @return a new regionizer instance
      */
-    public static ThreadedRegionizer<RegionTickData> createRegionizer() {
-        return new ThreadedRegionizer<>(DEFAULT_CONFIG, new RegionTickDataController());
+    public static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> createRegionizer(final ServerWorld world) {
+        return new ThreadedRegionizer<>(DEFAULT_CONFIG, world, createDefaultRegionCallbacks());
     }
 
     /**
@@ -86,10 +78,14 @@ public final class Ruthenium implements ModInitializer {
         return LOGGER;
     }
 
-    private static ThreadedRegionizer<RegionTickData> requireRegionizer(final ServerWorld world) {
+    private static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> requireRegionizer(final ServerWorld world) {
         if (!(world instanceof RegionizedServerWorld regionized)) {
             throw new IllegalStateException("Server world " + world + " is missing Ruthenium region state mixin");
         }
         return regionized.ruthenium$getRegionizer();
+    }
+
+    private static TickRegions createDefaultRegionCallbacks() {
+        return new TickRegions(TickRegionScheduler.getInstance());
     }
 }

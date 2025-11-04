@@ -7,8 +7,8 @@ import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.region.RegionTickData;
-import org.bacon.ruthenium.region.ThreadedRegion;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
+import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 
 /**
@@ -35,8 +35,8 @@ public final class RegionTaskDispatcher {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(task, "task");
 
-        final ThreadedRegionizer<RegionTickData> regionizer = requireRegionizer(world);
-        final ThreadedRegion<RegionTickData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
+        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
+        final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
         if (region == null) {
             LOGGER.debug("Executing chunk task immediately because chunk {} is not yet regionised", new ChunkPos(chunkX, chunkZ));
             task.run();
@@ -57,8 +57,8 @@ public final class RegionTaskDispatcher {
      */
     public static void runOnCurrentRegion(final Supplier<Runnable> task) {
         Objects.requireNonNull(task, "task");
-        final ThreadedRegion<RegionTickData> region = RegionTickScheduler.getCurrentRegion();
-        if (region == null || RegionTickScheduler.getCurrentWorld() == null) {
+        final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = TickRegionScheduler.getCurrentRegion();
+        if (region == null || TickRegionScheduler.getCurrentWorld() == null) {
             throw new IllegalStateException("No region is currently ticking on this thread");
         }
 
@@ -76,7 +76,7 @@ public final class RegionTaskDispatcher {
         region.getData().getTaskQueue().queueChunkTask(representative.x, representative.z, runnable);
     }
 
-    private static ThreadedRegionizer<RegionTickData> requireRegionizer(final ServerWorld world) {
+    private static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> requireRegionizer(final ServerWorld world) {
         if (!(world instanceof RegionizedServerWorld regionized)) {
             throw new IllegalStateException("World " + world + " is missing RegionizedServerWorld support");
         }

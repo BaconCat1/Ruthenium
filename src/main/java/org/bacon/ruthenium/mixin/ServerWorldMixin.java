@@ -9,10 +9,9 @@ import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
-import org.bacon.ruthenium.world.RegionTickScheduler;
+import org.bacon.ruthenium.world.TickRegionScheduler;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -26,11 +25,8 @@ import net.minecraft.world.chunk.WorldChunk;
 @Mixin(ServerWorld.class)
 public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionChunkTickAccess {
 
-    @Shadow
-    public abstract RegistryKey<World> getRegistryKey();
-
     @Unique
-    private ThreadedRegionizer<RegionTickData> ruthenium$regionizer;
+    private ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$regionizer;
 
     @Unique
     private boolean ruthenium$skipVanillaChunkTick;
@@ -39,17 +35,18 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private int ruthenium$regionChunkDepth;
 
     @Override
-    public ThreadedRegionizer<RegionTickData> ruthenium$getRegionizer() {
+    public ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$getRegionizer() {
         if (this.ruthenium$regionizer == null) {
-            this.ruthenium$regionizer = Ruthenium.createRegionizer();
-            Ruthenium.getLogger().info("Created regionizer for world {}", this.getRegistryKey().getValue());
+            this.ruthenium$regionizer = Ruthenium.createRegionizer((ServerWorld)(Object)this);
+            final RegistryKey<World> worldKey = ((ServerWorld)(Object)this).getRegistryKey();
+            Ruthenium.getLogger().info("Created regionizer for world {}", worldKey.getValue());
         }
         return this.ruthenium$regionizer;
     }
 
     @Inject(method = "tick", at = @At("HEAD"))
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
-        final boolean replaced = RegionTickScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
+    final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
         this.ruthenium$skipVanillaChunkTick = replaced;
     }
 

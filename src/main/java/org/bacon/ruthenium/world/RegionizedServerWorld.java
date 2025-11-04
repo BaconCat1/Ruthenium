@@ -13,5 +13,5 @@ public interface RegionizedServerWorld {
      *
      * @return the world-local regionizer
      */
-    ThreadedRegionizer<RegionTickData> ruthenium$getRegionizer();
+    ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$getRegionizer();
 }
