@@ -15,8 +15,8 @@ public final class RegionTickDataController implements RegionDataController<Regi
     @Override
     public void mergeData(final ThreadedRegion<RegionTickData> intoRegion, final RegionTickData intoData,
                           final ThreadedRegion<RegionTickData> fromRegion, final RegionTickData fromData) {
-        final long currentOffset = intoData.getCurrentTick() - fromData.getCurrentTick();
-        final long redstoneOffset = intoData.getRedstoneTick() - fromData.getRedstoneTick();
+        final long currentOffset = fromData.getCurrentTick() - intoData.getCurrentTick();
+        final long redstoneOffset = fromData.getRedstoneTick() - intoData.getRedstoneTick();
         fromData.applyOffset(currentOffset, redstoneOffset);
         intoData.absorb(fromData);
     }
