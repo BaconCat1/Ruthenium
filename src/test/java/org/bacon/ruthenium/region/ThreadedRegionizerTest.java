@@ -22,6 +22,15 @@ class ThreadedRegionizerTest {
         );
     }
 
+    private void advanceTicks(final RegionTickData data, final long currentTicks, final long redstoneTicks) {
+        for (int i = 0; i < currentTicks; i++) {
+            data.advanceCurrentTick();
+        }
+        for (int i = 0; i < redstoneTicks; i++) {
+            data.advanceRedstoneTick();
+        }
+    }
+
     @Test
     void testNewChunkCreatesRegion() {
         final ThreadedRegionizer<RegionTickData> regionizer = createRegionizer();
@@ -66,5 +75,23 @@ class ThreadedRegionizerTest {
         Assertions.assertEquals(ticking.getId(), survivor.getId());
         final RegionSectionPos neighbor = RegionSectionPos.fromChunk(16, 0, regionizer.getConfig().getSectionChunkShift());
         Assertions.assertTrue(survivor.getSections().containsKey(neighbor));
+    }
+
+    @Test
+    void testRegionDataMergePrefersLargestCounters() {
+        final ThreadedRegionizer<RegionTickData> regionizer = createRegionizer();
+        final ThreadedRegion<RegionTickData> first = regionizer.addChunk(0, 0);
+        final ThreadedRegion<RegionTickData> second = regionizer.addChunk(64, 0);
+
+        advanceTicks(first.getData(), 5, 3);
+        advanceTicks(second.getData(), 12, 8);
+
+        regionizer.addChunk(32, 0);
+
+        final Set<ThreadedRegion<RegionTickData>> regions = regionizer.snapshotRegions();
+        Assertions.assertEquals(1, regions.size());
+        final ThreadedRegion<RegionTickData> merged = regions.iterator().next();
+        Assertions.assertEquals(12, merged.getData().getCurrentTick());
+        Assertions.assertEquals(8, merged.getData().getRedstoneTick());
     }
 }
