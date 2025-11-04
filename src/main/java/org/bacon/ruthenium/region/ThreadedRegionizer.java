@@ -243,6 +243,28 @@ public final class ThreadedRegionizer<D> {
         }
     }
 
+    /**
+     * Attempts to resolve the region currently owning the provided chunk coordinates.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     * @return the owning region or {@code null} if the chunk is not registered
+     */
+    public ThreadedRegion<D> getRegionForChunk(final int chunkX, final int chunkZ) {
+        this.lock.lock();
+        try {
+            final RegionSectionPos sectionPos = RegionSectionPos.fromChunk(chunkX, chunkZ, this.config.getSectionChunkShift());
+            final RegionSection section = this.sections.get(sectionPos);
+            if (section == null || !section.hasChunks()) {
+                return null;
+            }
+            final ThreadedRegion<?> owner = section.getOwner();
+            return owner == null ? null : castOwner(owner);
+        } finally {
+            this.lock.unlock();
+        }
+    }
+
     private void processPendingMerges(final ThreadedRegion<D> region) {
         for (final ThreadedRegion<D> incoming : region.drainPendingIncoming()) {
             final ThreadedRegion<D> trackedIncoming = this.regionIndex.get(incoming.getId());

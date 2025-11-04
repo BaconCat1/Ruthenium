@@ -94,4 +94,35 @@ class ThreadedRegionizerTest {
         Assertions.assertEquals(12, merged.getData().getCurrentTick());
         Assertions.assertEquals(8, merged.getData().getRedstoneTick());
     }
+
+    @Test
+    void testRegionLookupByChunkCoordinates() {
+        final ThreadedRegionizer<RegionTickData> regionizer = createRegionizer();
+        final ThreadedRegion<RegionTickData> region = regionizer.addChunk(0, 0);
+        region.getData().addChunk(0, 0);
+        final ThreadedRegion<RegionTickData> located = regionizer.getRegionForChunk(0, 0);
+        Assertions.assertNotNull(located);
+        Assertions.assertEquals(region.getId(), located.getId());
+
+        regionizer.removeChunk(0, 0);
+        region.getData().removeChunk(0, 0);
+        Assertions.assertNull(regionizer.getRegionForChunk(0, 0));
+    }
+
+    @Test
+    void testRegionDataTracksChunkMembership() {
+        final ThreadedRegionizer<RegionTickData> regionizer = createRegionizer();
+        final ThreadedRegion<RegionTickData> region = regionizer.addChunk(0, 0);
+        region.getData().addChunk(0, 0);
+        Assertions.assertTrue(region.getData().containsChunk(0, 0));
+
+        final ThreadedRegion<RegionTickData> other = regionizer.addChunk(64, 0);
+        other.getData().addChunk(64, 0);
+        Assertions.assertTrue(other.getData().containsChunk(64, 0));
+
+        regionizer.addChunk(32, 0);
+        final ThreadedRegion<RegionTickData> merged = regionizer.snapshotRegions().iterator().next();
+        Assertions.assertTrue(merged.getData().containsChunk(0, 0));
+        Assertions.assertTrue(merged.getData().containsChunk(64, 0));
+    }
 }

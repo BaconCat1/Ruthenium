@@ -30,6 +30,7 @@ public final class RegionTickDataController implements RegionDataController<Regi
         Objects.requireNonNull(parentRegion, "parentRegion");
         Objects.requireNonNull(parentData, "parentData");
         Objects.requireNonNull(newRegionSections, "newRegionSections");
-        return parentData.copy();
+        final int sectionShift = parentRegion.getRegionizer().getConfig().getSectionChunkShift();
+        return parentData.splitForSections(newRegionSections, sectionShift);
     }
 }
