@@ -90,7 +90,6 @@ public final class TickRegionScheduler {
     public boolean tickWorld(final ServerWorld world, final BooleanSupplier shouldKeepTicking) {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
-        requireRegionizer(world);
         // If the scheduler has been halted (shutdown or fatal error), fall back to vanilla ticking.
         if (this.halted.get()) {
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler halted; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
@@ -103,10 +102,11 @@ public final class TickRegionScheduler {
             return false;
         }
 
-        // At this stage, the scheduler is active and the server wants to keep ticking. The region scheduler
-        // will drive chunk ticks on region threads; signal the mixin to skip vanilla per-chunk ticking.
-        // Note: finer-grained pumping (handling pending main-thread tasks) will be implemented later
-        // once scheduler APIs for main-thread task draining are available.
+        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
+        // At this stage, the scheduler is active and the server wants to keep ticking. Pump region task queues
+        // that require main-thread execution and then allow scheduler-driven chunk ticking to proceed on
+        // worker threads.
+        drainRegionTasks(regionizer, world, shouldKeepTicking);
         return true;
     }
 
@@ -124,6 +124,35 @@ public final class TickRegionScheduler {
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Deschedule region {} in world {}",
             handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
         this.scheduler.tryRetire(handle);
+    }
+
+    private void drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
+                                  final ServerWorld world,
+                                  final BooleanSupplier shouldKeepTicking) {
+        boolean drainedAny = false;
+        boolean continueDraining = true;
+        while (continueDraining && shouldKeepTicking.getAsBoolean()) {
+            continueDraining = false;
+            final boolean[] loopDrained = new boolean[1];
+            regionizer.computeForAllRegions(region -> {
+                final RegionScheduleHandle handle = region.getData().getScheduleHandle();
+                if (!handle.hasTasks()) {
+                    return;
+                }
+                final Boolean drained = handle.runTasks(() -> shouldKeepTicking.getAsBoolean());
+                if (Boolean.TRUE.equals(drained)) {
+                    loopDrained[0] = true;
+                }
+            });
+            if (loopDrained[0]) {
+                drainedAny = true;
+                continueDraining = true;
+            }
+        }
+        if (drainedAny) {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
+        }
     }
 
     public RegionScheduleHandle createHandle(final RegionTickData data,
