@@ -2,6 +2,8 @@ package org.bacon.ruthenium.region;
 
 import java.util.List;
 import java.util.Objects;
+import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 
 /**
@@ -32,22 +34,39 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public void onRegionCreate(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} created with {} sections", region.id, region.getOwnedSections().size());
+        }
     }
 
     @Override
     public void onRegionDestroy(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} destroyed", region.id);
+        }
     }
 
     @Override
     public void onRegionActive(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} became ACTIVE (sections={}, chunks={})", region.id,
+                region.getOwnedSections().size(), region.getOwnedChunks().size());
+        }
         this.scheduler.scheduleRegion(region.getData().getScheduleHandle());
     }
 
     @Override
     public void onRegionInactive(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} became INACTIVE", region.id);
+        }
         final RegionTickData data = region.getData();
         this.scheduler.descheduleRegion(data.getScheduleHandle());
         data.refreshScheduleHandle();
@@ -58,6 +77,10 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
                          final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> into) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(into, "into");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} merging into {}", from.id, into.id);
+        }
     }
 
     @Override
@@ -65,5 +88,9 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
                          final List<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData>> into) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(into, "into");
+        if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
+            RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
+                "Region {} splitting into {} regions", from.id, into.size());
+        }
     }
 }

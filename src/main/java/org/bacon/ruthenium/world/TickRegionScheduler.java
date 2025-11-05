@@ -19,6 +19,7 @@ import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.region.RegionTaskQueue;
 import org.bacon.ruthenium.region.RegionTickData;
@@ -67,6 +68,7 @@ public final class TickRegionScheduler {
         this.scheduler = new SchedulerThreadPool(targetThreads, threadFactory);
         this.scheduler.start();
         LOGGER.info("TickRegionScheduler started with {} tick threads", targetThreads);
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler started with {} tick threads", targetThreads);
     }
 
     public static TickRegionScheduler getInstance() {
@@ -95,12 +97,16 @@ public final class TickRegionScheduler {
     public void scheduleRegion(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
         handle.prepareForActivation();
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Schedule region {} in world {}",
+            handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
         this.scheduler.schedule(handle);
     }
 
     public void descheduleRegion(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
         handle.markNonSchedulable();
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Deschedule region {} in world {}",
+            handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
         this.scheduler.tryRetire(handle);
     }
 
@@ -110,6 +116,9 @@ public final class TickRegionScheduler {
         final RegionScheduleHandle handle = new RegionScheduleHandle(this, data, region);
         if (template != null) {
             handle.copyStateFrom(template);
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Create schedule handle for region {} (copied state)", region.id);
+        } else {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Create schedule handle for region {}", region.id);
         }
         return handle;
     }
@@ -139,12 +148,14 @@ public final class TickRegionScheduler {
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
 
-        runQueuedTasks(data, region, guard);
+        int processedTasks = 0;
+        processedTasks += runQueuedTasks(data, region, guard);
 
         final MinecraftServer server = world.getServer();
         final int randomTickSpeed = server.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED);
         final ServerChunkManager chunkManager = world.getChunkManager();
 
+        int tickedChunks = 0;
         final long[] chunkSnapshot = data.getChunks().toLongArray();
         for (int i = 0; i < chunkSnapshot.length && guard.getAsBoolean(); ++i) {
             final long chunkKey = chunkSnapshot[i];
@@ -161,6 +172,7 @@ public final class TickRegionScheduler {
             ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
             try {
                 ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
+                tickedChunks++;
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
             } finally {
@@ -168,16 +180,20 @@ public final class TickRegionScheduler {
             }
         }
 
-        runQueuedTasks(data, region, guard);
+        processedTasks += runQueuedTasks(data, region, guard);
         data.advanceCurrentTick();
         data.advanceRedstoneTick();
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+            "Region {} tick summary: chunksTicked={}, tasksProcessed={} (world={})",
+            region.id, tickedChunks, processedTasks, world.getRegistryKey().getValue());
         return true;
     }
 
-    private void runQueuedTasks(final RegionTickData data,
+    private int runQueuedTasks(final RegionTickData data,
                                 final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
                                 final BooleanSupplier guard) {
         final RegionTaskQueue queue = data.getTaskQueue();
+        int processed = 0;
 
         RegionTaskQueue.RegionChunkTask task;
         while (guard.getAsBoolean() && (task = queue.pollChunkTask()) != null) {
@@ -188,17 +204,25 @@ public final class TickRegionScheduler {
             }
             try {
                 task.runnable().run();
+                processed++;
             } catch (final Throwable throwable) {
                 LOGGER.error("Chunk task for {} in region {} failed",
                     new ChunkPos(task.chunkX(), task.chunkZ()), region.id, throwable);
             }
         }
+        if (processed > 0) {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Processed {} queued chunk tasks for region {}", processed, region.id);
+        }
+        return processed;
     }
 
     void handleRegionFailure(final RegionScheduleHandle handle, final Throwable throwable) {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = handle.getRegion();
         final ServerWorld world = region.regioniser.world;
         LOGGER.error("Region {} in world {} failed during tick", region.id, world.getRegistryKey().getValue(), throwable);
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+            "Region {} failed during tick: {}", region.id, String.valueOf(throwable.getMessage()));
         handle.markNonSchedulable();
     }
 
@@ -285,6 +309,10 @@ public final class TickRegionScheduler {
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable();
             final long tickStart = System.nanoTime();
 
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Tick start region {} (world={}, chunks={})", this.region.id,
+                world.getRegistryKey().getValue(), this.data.getChunks().size());
+
             this.scheduler.enterRegionContext(this.region, world, this);
             boolean success = false;
             long tickEnd = tickStart;
@@ -313,6 +341,8 @@ public final class TickRegionScheduler {
             if (duration > 0L) {
                 this.tickStats.recordTickDuration(duration);
             }
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Tick end region {}: {} ms", this.region.id, (duration / 1_000_000.0D));
             final long nextStart = TimeUtil.getGreatestTime(tickStart + TICK_INTERVAL_NANOS, tickEnd);
             this.setScheduledStart(nextStart);
             return !this.isMarkedNonSchedulable();

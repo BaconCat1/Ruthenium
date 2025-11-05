@@ -88,6 +88,15 @@ Ruthenium is a Fabric mod library that replaces the vanilla chunk tick loop with
 
 Note: You don’t need to schedule region ticks yourself—Ruthenium installs a scheduler that replaces vanilla chunk ticking automatically when the mod is present.
 
+## Commands
+
+- /region (operators only): Prints information about your current region and the world’s regionization state:
+  - Region ID, your chunk, and the region’s center chunk
+  - Total region count in the world
+  - Region size (sections, chunks)
+  - Tick stats: TPS, average MSPT, last/min/max over a rolling window
+  - Whether there are tasks queued for the region
+
 ## Configuration overview
 
 `RegionizerConfig` provides a fluent builder for tuning parameters:
