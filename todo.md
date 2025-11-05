@@ -18,8 +18,18 @@
 		- [x] Capture rolling tick duration metrics per region schedule handle.
 		- [x] Expose metrics via debug commands/logging surfaces.
 	- [ ] Implement RegionizedWorldData-backed world tick pump (connection ticks, mob/time state, chunk tick lists).
+		- [x] Instantiate and cache `RegionizedWorldData` from `ServerWorld` mixin.
+		- [x] Tick player connection services via `tickGlobalServices` during world orchestration.
+		- [ ] Mirror global world services (weather, raids, world border, time) through `RegionizedWorldData`.
+		- [ ] Populate mob/chunk tracking lists and redstone timers to back per-region ticks.
 	- [ ] Mirror Folia RegionShutdownThread + failure escalation so scheduler halt propagates cleanly to the server watchdog.
+		- [x] Introduce shutdown thread scaffold and trigger it from scheduler failure paths.
+		- [ ] Halt chunk systems and finish pending teleports before final stop.
+		- [ ] Save player inventories, chunks, and level data during shutdown pass.
 	- [ ] Bring over RegionScheduleHandle backlog controls (`TimeUtil`, `updateTickStartToMax`) to handle long ticks and rescheduling.
+		- [x] Integrate `Schedule` helper to bound tick deadlines and expose `updateTickStartToMax`.
+		- [ ] Port Folia `TickData` backlog reporting structures.
+		- [ ] Surface scheduler backlog metrics via commands/logging.
 - [x] Replace simplified region tick scheduler (`RegionTickScheduler`, `RegionTaskDispatcher`, etc.) with Folia versions.
 - [ ] Integrate scheduler entry points via mixins into server/world tick lifecycle, ensuring per-region threading mirrors Folia.
 	- [ ] Reconcile `ServerWorldMixin` tick head injection with the completed `TickRegionScheduler.tickWorld` flow (respect fallback boolean).
@@ -27,10 +37,17 @@
 	- [ ] Audit additional server tick entry points (`MinecraftServerMixin`, dimension iteration) for scheduler bootstrap/shutdown hooks.
 - [ ] Port regionized world data holders (player/chunk/entity tracking) and ensure chunk load/unload hooks follow Folia logic.
 	- [ ] Port Folia `RegionizedWorldData` (entity lists, block events, redstone timers, spawn state, nearby player tracker).
-	- [ ] Store `RegionizedWorldData` on the `ServerWorld` mixin and proxy key queries (`getRegionizedData`, `getNearbyPlayers`).
+		- [x] Add baseline `RegionizedWorldData` class with tick metadata and connection helpers.
+		- [ ] Implement entity/connection split & merge callbacks.
+		- [ ] Track block events, tick lists, and mob spawning windows.
+		- [ ] Mirror nearby player tracker and scheduler tick lists.
+	- [x] Store `RegionizedWorldData` on the `ServerWorld` mixin and proxy key queries (`getRegionizedData`, `getNearbyPlayers`).
 	- [ ] Replace Fabric chunk event handlers with regionized data-aware registration to avoid duplication and align with Folia merge/split callbacks.
 - [ ] Port task queues, scheduling helpers, and teleport utilities required by Folia threading.
 	- [ ] Port Folia `Schedule`, `TickData`, and related helpers that back `RegionScheduleHandle` timing APIs.
+		- [x] Port `Schedule` helper and integrate with region schedule handles.
+		- [ ] Port Folia `TickData`/`TickTime` backlog tracking types.
+		- [ ] Ensure scheduler exposes backlog inspector APIs equivalent to Folia.
 	- [ ] Implement `RegionizedData` scaffolding for per-region state transfer across merges/splits.
 	- [ ] Port `TeleportUtils` and integrate with Fabric-friendly entity move handling.
 - [ ] Adapt entity/chunk managers and mixins to enforce thread ownership checks as Folia does.
@@ -59,4 +76,4 @@
 - Coordinate/TickThread utility dependencies from Moonrise/concurrentutil
 
 
-Flesh out RegionizedWorldData.tickGlobalServices with the remaining Folia world-border/weather/time plumbing once the necessary accessor mixins are in place.
+Flesh out `RegionizedWorldData.tickGlobalServices` with world-border/weather/time plumbing once accessor mixins are ready.
