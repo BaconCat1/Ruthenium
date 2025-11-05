@@ -2,6 +2,7 @@ package org.bacon.ruthenium.world;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -182,7 +183,8 @@ public final class RegionizedWorldData {
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
         }
-        for (final ServerPlayerEntity player : this.world.getPlayers()) {
+    final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
+        for (final ServerPlayerEntity player : players) {
             final ServerPlayNetworkHandler networkHandler = player.networkHandler;
             if (networkHandler != null) {
                 networkHandler.tick();
