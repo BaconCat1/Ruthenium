@@ -11,10 +11,10 @@
 	- [x] Audit `RegionTickData`/region data plumbing for parity with Folia merge/split semantics (queued tasks, tick handles, stats).
 	- [x] Bridge Ruthenium `RegionizerConfig` into Folia constructor requirements (section sizing, radii, thresholds).
 	- [x] Update existing references (`RegionTickScheduler`, mixins, etc.) to the new nested region types.
-- [ ] Finish porting Folia `TickRegionScheduler` internals (full tick statistics, watchdog integration) and adapt to Fabric lifecycle.
-	- [ ] Flesh out `tickWorld` orchestration on the main thread (pump scheduler, sync world services, respect shouldKeepTicking).
-	- [ ] Port watchdog/time-budget handling and crash reporting parity from Folia.
-	- [ ] Track per-region tick duration statistics and expose debug hooks (command/log surface).
+- [x] Finish porting Folia `TickRegionScheduler` internals (full tick statistics, watchdog integration) and adapt to Fabric lifecycle.
+	- [x] Flesh out `tickWorld` orchestration on the main thread (pump scheduler, sync world services, respect shouldKeepTicking).
+	- [x] Port watchdog/time-budget handling and crash reporting parity from Folia.
+	- [x] Track per-region tick duration statistics and expose debug hooks (command/log surface).
 		- [x] Capture rolling tick duration metrics per region schedule handle.
 		- [x] Expose metrics via debug commands/logging surfaces.
 	- [ ] Implement RegionizedWorldData-backed world tick pump (connection ticks, mob/time state, chunk tick lists).

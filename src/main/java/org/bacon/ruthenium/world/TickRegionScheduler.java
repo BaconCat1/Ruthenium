@@ -3,6 +3,7 @@ package org.bacon.ruthenium.world;
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool;
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool.SchedulableTick;
 import ca.spottedleaf.concurrentutil.util.TimeUtil;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +27,8 @@ import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
+import org.bacon.ruthenium.world.RegionWatchdog.Event;
+import org.bacon.ruthenium.world.RegionWatchdog.RunningTick;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 
 /**
@@ -37,9 +40,16 @@ public final class TickRegionScheduler {
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final TickRegionScheduler INSTANCE = new TickRegionScheduler();
     private static final long TICK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L) / 20L;
+    private static final long WATCHDOG_WARN_NANOS = loadDuration("ruthenium.scheduler.watchdog.warnSeconds", 10L, TimeUnit.SECONDS);
+    private static final long WATCHDOG_CRASH_NANOS = loadDuration("ruthenium.scheduler.watchdog.crashSeconds", 60L, TimeUnit.SECONDS);
+    private static final long WATCHDOG_LOG_INTERVAL_NANOS = loadDuration("ruthenium.scheduler.watchdog.logIntervalSeconds", 5L, TimeUnit.SECONDS);
+    private static final long WATCHDOG_POLL_INTERVAL_MILLIS = loadDurationMillis("ruthenium.scheduler.watchdog.pollMillis", 1000L);
+    private static final long MAIN_THREAD_WARN_NANOS = loadDuration("ruthenium.scheduler.mainThread.warnMillis", 200L, TimeUnit.MILLISECONDS);
+    private static final long MAIN_THREAD_CRASH_NANOS = loadDuration("ruthenium.scheduler.mainThread.crashSeconds", 60L, TimeUnit.SECONDS);
 
     private final SchedulerThreadPool scheduler;
     private final AtomicBoolean halted = new AtomicBoolean();
+    private final RegionWatchdog watchdog;
 
     private final ThreadLocal<ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData>> currentRegion = new ThreadLocal<>();
     private final ThreadLocal<ServerWorld> currentWorld = new ThreadLocal<>();
@@ -66,6 +76,15 @@ public final class TickRegionScheduler {
         final int processorCount = Runtime.getRuntime().availableProcessors();
         final int targetThreads = Math.max(1, processorCount <= 4 ? 1 : processorCount / 2);
         this.scheduler = new SchedulerThreadPool(targetThreads, threadFactory);
+        this.watchdog = new RegionWatchdog(
+            WATCHDOG_WARN_NANOS,
+            WATCHDOG_CRASH_NANOS,
+            WATCHDOG_LOG_INTERVAL_NANOS,
+            Math.max(1L, WATCHDOG_POLL_INTERVAL_MILLIS),
+            this::handleWatchdogWarning,
+            this::handleWatchdogCrash
+        );
+        this.watchdog.start();
         this.scheduler.start();
         LOGGER.info("TickRegionScheduler started with {} tick threads", targetThreads);
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler started with {} tick threads", targetThreads);
@@ -90,24 +109,44 @@ public final class TickRegionScheduler {
     public boolean tickWorld(final ServerWorld world, final BooleanSupplier shouldKeepTicking) {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
-        // If the scheduler has been halted (shutdown or fatal error), fall back to vanilla ticking.
+
         if (this.halted.get()) {
-            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler halted; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Scheduler halted; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
             return false;
         }
 
-        // If the server indicates it should stop ticking (shutdown path), allow vanilla/main-thread shutdown to proceed.
         if (!shouldKeepTicking.getAsBoolean()) {
-            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Server requested stop-ticking; allowing vanilla tick for {}", world.getRegistryKey().getValue());
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Server requested stop-ticking; allowing vanilla tick for {}", world.getRegistryKey().getValue());
             return false;
         }
 
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
-        // At this stage, the scheduler is active and the server wants to keep ticking. Pump region task queues
-        // that require main-thread execution and then allow scheduler-driven chunk ticking to proceed on
-        // worker threads.
-        drainRegionTasks(regionizer, world, shouldKeepTicking);
-        return true;
+        final long tickStart = System.nanoTime();
+        final RunningTick runningTick = this.watchdog.track(world, null, Thread.currentThread(), tickStart);
+    boolean drainedTasks = false;
+        boolean fallback = false;
+        try {
+            drainedTasks = drainRegionTasks(regionizer, world, shouldKeepTicking);
+            if (this.halted.get()) {
+                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                    "Scheduler halted mid-tick; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
+                fallback = true;
+                return false;
+            }
+            if (!shouldKeepTicking.getAsBoolean()) {
+                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                    "Server requested stop-ticking during scheduler pump for {}", world.getRegistryKey().getValue());
+                fallback = true;
+                return false;
+            }
+            return true;
+        } finally {
+            this.watchdog.untrack(runningTick);
+            final long duration = System.nanoTime() - tickStart;
+            this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
+        }
     }
 
     public void scheduleRegion(final RegionScheduleHandle handle) {
@@ -126,9 +165,9 @@ public final class TickRegionScheduler {
         this.scheduler.tryRetire(handle);
     }
 
-    private void drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
-                                  final ServerWorld world,
-                                  final BooleanSupplier shouldKeepTicking) {
+    private boolean drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
+                                     final ServerWorld world,
+                                     final BooleanSupplier shouldKeepTicking) {
         boolean drainedAny = false;
         boolean continueDraining = true;
         while (continueDraining && shouldKeepTicking.getAsBoolean()) {
@@ -153,6 +192,7 @@ public final class TickRegionScheduler {
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
         }
+        return drainedAny;
     }
 
     public RegionScheduleHandle createHandle(final RegionTickData data,
@@ -172,6 +212,7 @@ public final class TickRegionScheduler {
         if (!this.halted.compareAndSet(false, true)) {
             return;
         }
+        this.watchdog.shutdown();
         this.scheduler.halt(true, TimeUnit.SECONDS.toNanos(5L));
     }
 
@@ -278,6 +319,163 @@ public final class TickRegionScheduler {
         return regionized.ruthenium$getRegionizer();
     }
 
+    private static long loadDuration(final String key, final long defaultValue, final TimeUnit unit) {
+        final String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return unit.toNanos(defaultValue);
+        }
+        try {
+            return unit.toNanos(Long.parseLong(raw.trim()));
+        } catch (final NumberFormatException ex) {
+            LOGGER.warn("Invalid value '{}' for system property {}. Using default {} {}.", raw, key, defaultValue,
+                unit.name().toLowerCase(Locale.ROOT));
+            return unit.toNanos(defaultValue);
+        }
+    }
+
+    private static long loadDurationMillis(final String key, final long defaultValue) {
+        final String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (final NumberFormatException ex) {
+            LOGGER.warn("Invalid value '{}' for system property {}. Using default {} ms.", raw, key, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private void handleWatchdogWarning(final Event event) {
+        final RunningTick tick = event.tick();
+        final double millis = nanosToMillis(event.durationNanos());
+        final Thread thread = tick.thread();
+        final RegionScheduleHandle handle = tick.handle();
+
+        if (handle != null) {
+            final ServerWorld world = handle.getWorld();
+            final String message = String.format(Locale.ROOT,
+                "Region watchdog warning: %s exceeded %.2f ms on thread %s",
+                describeHandle(handle), millis, thread.getName());
+            LOGGER.warn(message);
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("Region watchdog stack trace:\n{}", formatStackTrace(thread));
+            }
+        } else {
+            final ServerWorld world = tick.world();
+            if (world != null) {
+                LOGGER.warn("Main thread watchdog warning: world {} tick exceeded {} ms",
+                    world.getRegistryKey().getValue(), String.format(Locale.ROOT, "%.2f", millis));
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Main thread stack:\n{}", formatStackTrace(thread));
+                }
+            } else {
+                LOGGER.warn("Watchdog observed long-running task ({} ms) on thread {}",
+                    String.format(Locale.ROOT, "%.2f", millis), thread.getName());
+            }
+        }
+    }
+
+    private void handleWatchdogCrash(final Event event) {
+        final RunningTick tick = event.tick();
+        final Thread thread = tick.thread();
+        final long durationNanos = event.durationNanos();
+        final double millis = nanosToMillis(durationNanos);
+        final RegionScheduleHandle handle = tick.handle();
+
+        if (handle == null) {
+            final ServerWorld world = tick.world();
+            if (world != null) {
+                LOGGER.error("Main thread watchdog timeout: world {} tick exceeded {} ms",
+                    world.getRegistryKey().getValue(), String.format(Locale.ROOT, "%.2f", millis));
+                LOGGER.error("Main thread stack:\n{}", formatStackTrace(thread));
+                this.handleMainThreadTimeout(world, durationNanos);
+            } else {
+                LOGGER.error("Watchdog timeout on thread {} (duration {} ms) with no associated world",
+                    thread.getName(), String.format(Locale.ROOT, "%.2f", millis));
+            }
+            return;
+        }
+
+        final String message = String.format(Locale.ROOT,
+            "Region watchdog timeout: %s exceeded %.2f ms on thread %s",
+            describeHandle(handle), millis, thread.getName());
+        LOGGER.error(message);
+        LOGGER.error("Region stack trace:\n{}", formatStackTrace(thread));
+        this.handleRegionFailure(handle, new RuntimeException(message));
+    }
+
+    private void checkMainThreadBudget(final ServerWorld world, final long durationNanos,
+                                       final boolean drainedTasks, final boolean fallback) {
+        if (MAIN_THREAD_CRASH_NANOS > 0L && durationNanos >= MAIN_THREAD_CRASH_NANOS) {
+            this.handleMainThreadTimeout(world, durationNanos);
+            return;
+        }
+
+        if (MAIN_THREAD_WARN_NANOS > 0L && durationNanos >= MAIN_THREAD_WARN_NANOS) {
+            this.handleMainThreadWarning(world, durationNanos, drainedTasks, fallback);
+        }
+    }
+
+    private void handleMainThreadWarning(final ServerWorld world, final long durationNanos,
+                                         final boolean drainedTasks, final boolean fallback) {
+        final double millis = nanosToMillis(durationNanos);
+        final String message = String.format(Locale.ROOT,
+            "Main thread spent %.2f ms orchestrating region ticks for world %s (tasksDrained=%s, fallback=%s)",
+            millis, world.getRegistryKey().getValue(), drainedTasks, fallback);
+        LOGGER.warn(message);
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Main thread stack:\n{}", formatStackTrace(Thread.currentThread()));
+        }
+    }
+
+    private void handleMainThreadTimeout(final ServerWorld world, final long durationNanos) {
+        if (!this.halted.compareAndSet(false, true)) {
+            return;
+        }
+        final double millis = nanosToMillis(durationNanos);
+        final String worldId = String.valueOf(world.getRegistryKey().getValue());
+        final RuntimeException exception = new RuntimeException(String.format(Locale.ROOT,
+            "Main thread watchdog timeout: world %s tick exceeded %.2f ms", worldId, millis));
+        LOGGER.error(exception.getMessage());
+        LOGGER.error("Main thread stack:\n{}", formatStackTrace(Thread.currentThread()));
+        this.watchdog.shutdown();
+        this.scheduler.halt(false, 0L);
+        final MinecraftServer server = world.getServer();
+        if (server != null) {
+            server.stop(false);
+        }
+    }
+
+    private static double nanosToMillis(final long nanos) {
+        return nanos / 1_000_000.0D;
+    }
+
+    private static String formatStackTrace(final Thread thread) {
+        final StringBuilder builder = new StringBuilder(256);
+        builder.append(thread.getName()).append(':').append(System.lineSeparator());
+        for (final StackTraceElement element : thread.getStackTrace()) {
+            builder.append("    at ").append(element).append(System.lineSeparator());
+        }
+        return builder.toString();
+    }
+
+    private String describeHandle(final RegionScheduleHandle handle) {
+        if (handle == null) {
+            return "<global>";
+        }
+        final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = handle.getRegion();
+        if (region == null) {
+            return "<unassigned>";
+        }
+        final ChunkPos center = region.getCenterChunk();
+        final String worldId = String.valueOf(handle.getWorld().getRegistryKey().getValue());
+        final String centerStr = center == null ? "unknown" : center.x + "," + center.z;
+        return "region=" + region.id + "@" + centerStr + " world=" + worldId;
+    }
+
     public static final class RegionScheduleHandle extends SchedulableTick {
 
         private final TickRegionScheduler scheduler;
@@ -353,6 +551,8 @@ public final class TickRegionScheduler {
             final ServerWorld world = this.getWorld();
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable();
             final long tickStart = System.nanoTime();
+            final RunningTick runningTick = this.scheduler == null ? null
+                : this.scheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
 
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick start region {} (world={}, chunks={})", this.region.id,
@@ -368,6 +568,9 @@ public final class TickRegionScheduler {
                 this.scheduler.handleRegionFailure(this, throwable);
                 return false;
             } finally {
+                if (runningTick != null) {
+                    this.scheduler.watchdog.untrack(runningTick);
+                }
                 this.scheduler.exitRegionContext();
                 try {
                     this.region.markNotTicking();
@@ -404,7 +607,18 @@ public final class TickRegionScheduler {
                 return null;
             }
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable() && canContinue.getAsBoolean();
-            this.scheduler.runQueuedTasks(this.data, this.region, guard);
+            final TickRegionScheduler owningScheduler = Objects.requireNonNull(this.scheduler, "scheduler");
+            final ServerWorld world = this.region == null ? null : this.getWorld();
+            final long tickStart = System.nanoTime();
+            final RunningTick runningTick = owningScheduler == null ? null
+                : owningScheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
+            try {
+                owningScheduler.runQueuedTasks(this.data, this.region, guard);
+            } finally {
+                if (runningTick != null) {
+                    owningScheduler.watchdog.untrack(runningTick);
+                }
+            }
             return Boolean.TRUE;
         }
 
