@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 import org.bacon.ruthenium.util.CoordinateUtil;
 import org.bacon.ruthenium.world.TickRegionScheduler;
+import org.bacon.ruthenium.world.RegionTickStats;
 
 /**
  * Simple region data container that stores per-region tick counters.
@@ -147,6 +148,18 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
      */
     public RegionTaskQueue getTaskQueue() {
         return this.taskQueue;
+    }
+
+    /**
+     * Provides access to the rolling tick statistics maintained by the region's schedule handle.
+     *
+     * @return the stats tracker or {@code null} when the handle has not been initialised
+     */
+    public RegionTickStats getTickStats() {
+        if (this.scheduleHandle == null) {
+            return null;
+        }
+        return this.scheduleHandle.getTickStats();
     }
 
     @Override

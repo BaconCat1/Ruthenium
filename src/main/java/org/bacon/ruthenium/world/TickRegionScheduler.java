@@ -216,6 +216,7 @@ public final class TickRegionScheduler {
         private ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region;
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private long lastTickStart = SchedulerThreadPool.DEADLINE_NOT_SET;
+        private final RegionTickStats tickStats = new RegionTickStats();
 
         private RegionScheduleHandle(final TickRegionScheduler scheduler,
                                      final RegionTickData data,
@@ -248,6 +249,7 @@ public final class TickRegionScheduler {
 
         public void copyStateFrom(final RegionScheduleHandle other) {
             this.lastTickStart = other.lastTickStart;
+            this.tickStats.copyFrom(other.tickStats);
         }
 
         void prepareForActivation() {
@@ -285,8 +287,10 @@ public final class TickRegionScheduler {
 
             this.scheduler.enterRegionContext(this.region, world, this);
             boolean success = false;
+            long tickEnd = tickStart;
             try {
                 success = this.scheduler.tickRegion(this, guard);
+                tickEnd = System.nanoTime();
             } catch (final Throwable throwable) {
                 this.scheduler.handleRegionFailure(this, throwable);
                 return false;
@@ -305,7 +309,11 @@ public final class TickRegionScheduler {
             }
 
             this.lastTickStart = tickStart;
-            final long nextStart = TimeUtil.getGreatestTime(tickStart + TICK_INTERVAL_NANOS, System.nanoTime());
+            final long duration = Math.max(0L, tickEnd - tickStart);
+            if (duration > 0L) {
+                this.tickStats.recordTickDuration(duration);
+            }
+            final long nextStart = TimeUtil.getGreatestTime(tickStart + TICK_INTERVAL_NANOS, tickEnd);
             this.setScheduledStart(nextStart);
             return !this.isMarkedNonSchedulable();
         }
@@ -327,6 +335,10 @@ public final class TickRegionScheduler {
 
         private boolean tryMarkTicking() {
             return this.region.tryMarkTicking(this::isMarkedNonSchedulable);
+        }
+
+        public RegionTickStats getTickStats() {
+            return this.tickStats;
         }
     }
 }

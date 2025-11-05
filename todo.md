@@ -15,6 +15,8 @@
 	- [ ] Flesh out `tickWorld` orchestration on the main thread (pump scheduler, sync world services, respect shouldKeepTicking).
 	- [ ] Port watchdog/time-budget handling and crash reporting parity from Folia.
 	- [ ] Track per-region tick duration statistics and expose debug hooks (command/log surface).
+		- [x] Capture rolling tick duration metrics per region schedule handle.
+		- [ ] Expose metrics via debug commands/logging surfaces.
 - [x] Replace simplified region tick scheduler (`RegionTickScheduler`, `RegionTaskDispatcher`, etc.) with Folia versions.
 - [ ] Integrate scheduler entry points via mixins into server/world tick lifecycle, ensuring per-region threading mirrors Folia.
 - [ ] Port regionized world data holders (player/chunk/entity tracking) and ensure chunk load/unload hooks follow Folia logic.
