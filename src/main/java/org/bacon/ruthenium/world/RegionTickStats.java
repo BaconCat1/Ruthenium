@@ -169,10 +169,67 @@ public final class RegionTickStats {
         }
     }
 
+    /**
+     * Captures a stable snapshot of the aggregated statistics. This allows callers to
+     * display consistent values without performing multiple synchronized lookups that can
+     * observe different sample windows.
+     *
+     * @return snapshot containing the current statistics
+     */
+    public Snapshot snapshot() {
+        synchronized (this) {
+            final int count = this.samples.size();
+            if (count == 0) {
+                return Snapshot.EMPTY;
+            }
+
+            long max = Long.MIN_VALUE;
+            long min = Long.MAX_VALUE;
+            for (int i = 0; i < count; ++i) {
+                final long value = this.samples.getLong(i);
+                if (value > max) {
+                    max = value;
+                }
+                if (value < min) {
+                    min = value;
+                }
+            }
+
+            final long last = this.samples.getLong(count - 1);
+            final double average = (double)this.totalNanos / (double)count;
+            return new Snapshot(count, average, last, min, max);
+        }
+    }
+
     private void trimIfNeeded() {
         while (this.samples.size() > this.windowSize) {
             final long removed = this.samples.removeLong(0);
             this.totalNanos -= removed;
+        }
+    }
+
+    /**
+     * Immutable snapshot of aggregated statistics.
+     */
+    public record Snapshot(int sampleCount, double averageTickNanos,
+                           long lastTickNanos, long minTickNanos, long maxTickNanos) {
+
+        public static final Snapshot EMPTY = new Snapshot(0, 0.0D, 0L, 0L, 0L);
+
+        public double averageTickMillis() {
+            return this.averageTickNanos / 1_000_000.0D;
+        }
+
+        public double lastTickMillis() {
+            return this.lastTickNanos / 1_000_000.0D;
+        }
+
+        public double minTickMillis() {
+            return this.minTickNanos / 1_000_000.0D;
+        }
+
+        public double maxTickMillis() {
+            return this.maxTickNanos / 1_000_000.0D;
         }
     }
 }

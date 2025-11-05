@@ -34,6 +34,14 @@ class RegionTickStatsTest {
         Assertions.assertEquals(3_000_000L, stats.getLastTickNanos());
         Assertions.assertEquals(2_000_000.0D, stats.getAverageTickNanos(), 0.0001D);
         Assertions.assertEquals(2.0D, stats.getAverageTickMillis(), 0.0001D);
+
+        final RegionTickStats.Snapshot snapshot = stats.snapshot();
+        Assertions.assertEquals(3, snapshot.sampleCount());
+        Assertions.assertEquals(2_000_000.0D, snapshot.averageTickNanos(), 0.0001D);
+        Assertions.assertEquals(2.0D, snapshot.averageTickMillis(), 0.0001D);
+        Assertions.assertEquals(3.0D, snapshot.lastTickMillis(), 0.0001D);
+        Assertions.assertEquals(1.0D, snapshot.minTickMillis(), 0.0001D);
+        Assertions.assertEquals(3.0D, snapshot.maxTickMillis(), 0.0001D);
     }
 
     @Test

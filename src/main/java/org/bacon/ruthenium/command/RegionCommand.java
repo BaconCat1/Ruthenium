@@ -14,7 +14,8 @@ import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
 import org.bacon.ruthenium.world.RegionTickStats;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 
-import java.text.DecimalFormat;
+import java.text.NumberFormat;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static net.minecraft.server.command.CommandManager.literal;
@@ -24,8 +25,6 @@ import static net.minecraft.server.command.CommandManager.literal;
  * total region count in the world, and basic tick stats (TPS/MSPT).
  */
 public final class RegionCommand {
-
-    private static final DecimalFormat DF2 = new DecimalFormat("0.00");
 
     private RegionCommand() {}
 
@@ -71,11 +70,12 @@ public final class RegionCommand {
                 final ChunkPos center = region.getCenterChunk();
 
                 final RegionTickStats stats = region.getData().getTickStats();
-                final double avgMspt = stats == null ? 0.0D : stats.getAverageTickMillis();
-                final double lastMs = stats == null ? 0.0D : (stats.getLastTickNanos() / 1_000_000.0D);
-                final double maxMs = stats == null ? 0.0D : (stats.getMaxTickNanos() / 1_000_000.0D);
-                final double minMs = stats == null ? 0.0D : (stats.getMinTickNanos() / 1_000_000.0D);
-                final int samples = stats == null ? 0 : stats.getSampleCount();
+                final RegionTickStats.Snapshot snapshot = stats == null ? RegionTickStats.Snapshot.EMPTY : stats.snapshot();
+                final double avgMspt = snapshot.averageTickMillis();
+                final double lastMs = snapshot.lastTickMillis();
+                final double maxMs = snapshot.maxTickMillis();
+                final double minMs = snapshot.minTickMillis();
+                final int samples = snapshot.sampleCount();
                 final double tps = avgMspt <= 0.0D ? 0.0D : Math.min(20.0D, 1000.0D / avgMspt);
 
                 final StringBuilder sb = new StringBuilder(256);
@@ -90,10 +90,10 @@ public final class RegionCommand {
                 if (stats == null || samples == 0) {
                     sb.append(" - TPS: (warming up)  MSPT: (no samples yet)\n");
                 } else {
-                    sb.append(" - TPS: ").append(DF2.format(tps))
-                      .append("  MSPT(avg): ").append(DF2.format(avgMspt))
-                      .append("  last: ").append(DF2.format(lastMs))
-                      .append("  min/max: ").append(DF2.format(minMs)).append("/").append(DF2.format(maxMs)).append('\n');
+                    sb.append(" - TPS: ").append(formatDouble(tps))
+                      .append("  MSPT(avg): ").append(formatDouble(avgMspt))
+                      .append("  last: ").append(formatDouble(lastMs))
+                      .append("  min/max: ").append(formatDouble(minMs)).append("/").append(formatDouble(maxMs)).append('\n');
                 }
 
                 // basic queue state (no size available)
@@ -152,5 +152,31 @@ public final class RegionCommand {
             );
 
         dispatcher.register(root);
+    }
+
+    static String formatDouble(final double value) {
+        if (!Double.isFinite(value)) {
+            return Double.toString(value);
+        }
+
+        final double abs = Math.abs(value);
+        final int maxFractionDigits;
+        if (abs >= 10.0D) {
+            maxFractionDigits = 2;
+        } else if (abs >= 1.0D) {
+            maxFractionDigits = 3;
+        } else if (abs >= 0.1D) {
+            maxFractionDigits = 4;
+        } else if (abs >= 0.01D) {
+            maxFractionDigits = 5;
+        } else {
+            maxFractionDigits = 6;
+        }
+
+        final NumberFormat format = NumberFormat.getInstance(Locale.ROOT);
+        format.setGroupingUsed(false);
+        format.setMinimumFractionDigits(Math.min(2, maxFractionDigits));
+        format.setMaximumFractionDigits(Math.max(2, maxFractionDigits));
+        return format.format(value);
     }
 }

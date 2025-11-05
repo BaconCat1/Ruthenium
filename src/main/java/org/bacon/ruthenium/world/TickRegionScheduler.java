@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
@@ -39,6 +40,7 @@ public final class TickRegionScheduler {
     private static final Logger LOGGER = LogManager.getLogger(TickRegionScheduler.class);
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private static final TickRegionScheduler INSTANCE = new TickRegionScheduler();
+    private static final LoggingOptions LOGGING_OPTIONS = LoggingOptions.load(System::getProperty);
     private static final long TICK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L) / 20L;
     private static final long WATCHDOG_WARN_NANOS = loadDuration("ruthenium.scheduler.watchdog.warnSeconds", 10L, TimeUnit.SECONDS);
     private static final long WATCHDOG_CRASH_NANOS = loadDuration("ruthenium.scheduler.watchdog.crashSeconds", 60L, TimeUnit.SECONDS);
@@ -116,14 +118,14 @@ public final class TickRegionScheduler {
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
 
         if (this.halted.get()) {
-            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
-                "Scheduler halted; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
+            this.logFallback("Scheduler halted; falling back to vanilla world tick for {}",
+                world.getRegistryKey().getValue());
             return false;
         }
 
         if (!shouldKeepTicking.getAsBoolean()) {
-            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
-                "Server requested stop-ticking; allowing vanilla tick for {}", world.getRegistryKey().getValue());
+            this.logFallback("Server requested stop-ticking; allowing vanilla tick for {}",
+                world.getRegistryKey().getValue());
             return false;
         }
 
@@ -138,14 +140,14 @@ public final class TickRegionScheduler {
         try {
             drainedTasks = drainRegionTasks(regionizer, world, shouldKeepTicking);
             if (this.halted.get()) {
-                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
-                    "Scheduler halted mid-tick; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
+                this.logFallback("Scheduler halted mid-tick; falling back to vanilla world tick for {}",
+                    world.getRegistryKey().getValue());
                 fallback = true;
                 return false;
             }
             if (!shouldKeepTicking.getAsBoolean()) {
-                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
-                    "Server requested stop-ticking during scheduler pump for {}", world.getRegistryKey().getValue());
+                this.logFallback("Server requested stop-ticking during scheduler pump for {}",
+                    world.getRegistryKey().getValue());
                 fallback = true;
                 return false;
             }
@@ -213,6 +215,9 @@ public final class TickRegionScheduler {
             }
         }
         if (drainedAny) {
+            if (LOGGING_OPTIONS.logDrainedTasks()) {
+                LOGGER.info("Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
+            }
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
         }
@@ -308,6 +313,10 @@ public final class TickRegionScheduler {
         processedTasks += runQueuedTasks(data, region, guard);
         data.advanceCurrentTick();
         data.advanceRedstoneTick();
+        if (LOGGING_OPTIONS.logRegionSummaries()) {
+            LOGGER.info("Region {} tick summary: chunksTicked={}, tasksProcessed={} (world={})",
+                region.id, tickedChunks, processedTasks, world.getRegistryKey().getValue());
+        }
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
             "Region {} tick summary: chunksTicked={}, tasksProcessed={} (world={})",
             region.id, tickedChunks, processedTasks, world.getRegistryKey().getValue());
@@ -336,6 +345,9 @@ public final class TickRegionScheduler {
             }
         }
         if (processed > 0) {
+            if (LOGGING_OPTIONS.logTaskQueueProcessing()) {
+                LOGGER.info("Processed {} queued chunk tasks for region {}", processed, region.id);
+            }
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Processed {} queued chunk tasks for region {}", processed, region.id);
         }
@@ -391,6 +403,16 @@ public final class TickRegionScheduler {
             LOGGER.warn("Invalid value '{}' for system property {}. Using default {} ms.", raw, key, defaultValue);
             return defaultValue;
         }
+    }
+
+    private void logFallback(final String message, final Object... args) {
+        if (LOGGING_OPTIONS.logFallbacks()) {
+            LOGGER.info(message, args);
+            if (LOGGING_OPTIONS.logFallbackStacks()) {
+                LOGGER.debug("Vanilla fallback triggered stack:\n{}", formatStackTrace(Thread.currentThread()));
+            }
+        }
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message, args);
     }
 
     private void handleWatchdogWarning(final Event event) {
@@ -704,6 +726,81 @@ public final class TickRegionScheduler {
             } else {
                 this.tickSchedule.setLastPeriod(newStart - TICK_INTERVAL_NANOS);
             }
+        }
+    }
+
+    static final class LoggingOptions {
+
+        private static final String LOG_FALLBACK = "ruthenium.scheduler.logFallback";
+        private static final String LOG_FALLBACK_STACKS = "ruthenium.scheduler.logFallbackStackTraces";
+        private static final String LOG_DRAINED_TASKS = "ruthenium.scheduler.logDrainedTasks";
+        private static final String LOG_REGION_SUMMARIES = "ruthenium.scheduler.logRegionSummaries";
+        private static final String LOG_TASK_QUEUE = "ruthenium.scheduler.logTaskQueueProcessing";
+
+        private final boolean logFallbacks;
+        private final boolean logFallbackStacks;
+        private final boolean logDrainedTasks;
+        private final boolean logRegionSummaries;
+        private final boolean logTaskQueueProcessing;
+
+        private LoggingOptions(final boolean logFallbacks,
+                               final boolean logFallbackStacks,
+                               final boolean logDrainedTasks,
+                               final boolean logRegionSummaries,
+                               final boolean logTaskQueueProcessing) {
+            this.logFallbacks = logFallbacks;
+            this.logFallbackStacks = logFallbackStacks;
+            this.logDrainedTasks = logDrainedTasks;
+            this.logRegionSummaries = logRegionSummaries;
+            this.logTaskQueueProcessing = logTaskQueueProcessing;
+        }
+
+        static LoggingOptions load(final Function<String, String> propertyProvider) {
+            Objects.requireNonNull(propertyProvider, "propertyProvider");
+            final boolean fallback = loadBoolean(propertyProvider, LOG_FALLBACK, true);
+            final boolean fallbackStacks = loadBoolean(propertyProvider, LOG_FALLBACK_STACKS, false);
+            final boolean drained = loadBoolean(propertyProvider, LOG_DRAINED_TASKS, false);
+            final boolean summaries = loadBoolean(propertyProvider, LOG_REGION_SUMMARIES, false);
+            final boolean taskQueue = loadBoolean(propertyProvider, LOG_TASK_QUEUE, false);
+            return new LoggingOptions(fallback, fallbackStacks, drained, summaries, taskQueue);
+        }
+
+        boolean logFallbacks() {
+            return this.logFallbacks;
+        }
+
+        boolean logFallbackStacks() {
+            return this.logFallbackStacks;
+        }
+
+        boolean logDrainedTasks() {
+            return this.logDrainedTasks;
+        }
+
+        boolean logRegionSummaries() {
+            return this.logRegionSummaries;
+        }
+
+        boolean logTaskQueueProcessing() {
+            return this.logTaskQueueProcessing;
+        }
+
+        private static boolean loadBoolean(final Function<String, String> propertyProvider,
+                                           final String key,
+                                           final boolean defaultValue) {
+            final String raw = propertyProvider.apply(key);
+            if (raw == null || raw.isBlank()) {
+                return defaultValue;
+            }
+            final String normalized = raw.trim().toLowerCase(Locale.ROOT);
+            if ("true".equals(normalized)) {
+                return true;
+            }
+            if ("false".equals(normalized)) {
+                return false;
+            }
+            LOGGER.warn("Invalid boolean value '{}' for system property {}. Using default {}.", raw, key, defaultValue);
+            return defaultValue;
         }
     }
 }
