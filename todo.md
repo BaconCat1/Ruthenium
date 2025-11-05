@@ -3,7 +3,7 @@
 - [x] Audit existing simplified region/threading code to identify divergence from Folia reference.
 - [x] Catalogue Folia classes (regionizer, schedulers, task queues, world data integrations) needed for parity.
 - [x] Update build configuration to pull required Folia dependencies (concurrentutil, moonrise, etc.) or add equivalents.
-- [ ] Port Folia `ThreadedRegionizer` and supporting data structures into the Fabric mod package layout.
+- [x] Port Folia `ThreadedRegionizer` and supporting data structures into the Fabric mod package layout.
 	- [x] Recreate Folia `ThreadedRegionizer` APIs, nested `ThreadedRegion`, and `ThreadedRegionSection` logic with minimal adaptation (naming + Yarn types only).
 	- [x] Retrofit world bootstrap (`Ruthenium`, `ServerWorldMixin`) to construct the new regionizer signature per-world.
 	- [x] Replace `RegionTickDataController` scaffolding with Folia `TickRegions` equivalent once scheduler code lands.
