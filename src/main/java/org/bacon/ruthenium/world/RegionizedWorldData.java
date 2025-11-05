@@ -8,6 +8,8 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.village.raid.RaidManager;
+import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.util.CoordinateUtil;
 
 /**
@@ -132,7 +134,36 @@ public final class RegionizedWorldData {
     }
 
     public void tickGlobalServices(final BooleanSupplier shouldKeepTicking) {
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
         this.tickConnections(shouldKeepTicking);
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+        this.tickWorldBorder();
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+    this.tickWeather();
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+    this.updateSleepingPlayers();
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+        this.tickRaids();
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+        this.tickTime();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
     }
 
@@ -156,6 +187,27 @@ public final class RegionizedWorldData {
                 networkHandler.tick();
             }
         }
+    }
+
+    private void tickWorldBorder() {
+        this.world.getWorldBorder().tick();
+    }
+
+    private void tickWeather() {
+        ((ServerWorldAccessor)this.world).ruthenium$invokeTickWeather();
+    }
+
+    private void updateSleepingPlayers() {
+        ((ServerWorldAccessor)this.world).ruthenium$invokeUpdateSleepingPlayers();
+    }
+
+    private void tickRaids() {
+        final RaidManager raidManager = this.world.getRaidManager();
+        raidManager.tick(this.world);
+    }
+
+    private void tickTime() {
+        ((ServerWorldAccessor)this.world).ruthenium$invokeTickTime();
     }
 
     public void notifyChunkListDrained(final Iterable<ChunkPos> chunks) {

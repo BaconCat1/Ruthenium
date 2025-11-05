@@ -10,4 +10,13 @@ public interface ServerWorldAccessor {
 
     @Invoker("tickChunk")
     void ruthenium$invokeTickChunk(WorldChunk chunk, int randomTickSpeed);
+
+    @Invoker("tickTime")
+    void ruthenium$invokeTickTime();
+    
+    @Invoker("tickWeather")
+    void ruthenium$invokeTickWeather();
+
+    @Invoker("updateSleepingPlayers")
+    void ruthenium$invokeUpdateSleepingPlayers();
 }
