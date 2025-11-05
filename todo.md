@@ -16,15 +16,32 @@
 	- [ ] Port watchdog/time-budget handling and crash reporting parity from Folia.
 	- [ ] Track per-region tick duration statistics and expose debug hooks (command/log surface).
 		- [x] Capture rolling tick duration metrics per region schedule handle.
-		- [ ] Expose metrics via debug commands/logging surfaces.
+		- [x] Expose metrics via debug commands/logging surfaces.
+	- [ ] Implement RegionizedWorldData-backed world tick pump (connection ticks, mob/time state, chunk tick lists).
+	- [ ] Mirror Folia RegionShutdownThread + failure escalation so scheduler halt propagates cleanly to the server watchdog.
+	- [ ] Bring over RegionScheduleHandle backlog controls (`TimeUtil`, `updateTickStartToMax`) to handle long ticks and rescheduling.
 - [x] Replace simplified region tick scheduler (`RegionTickScheduler`, `RegionTaskDispatcher`, etc.) with Folia versions.
 - [ ] Integrate scheduler entry points via mixins into server/world tick lifecycle, ensuring per-region threading mirrors Folia.
+	- [ ] Reconcile `ServerWorldMixin` tick head injection with the completed `TickRegionScheduler.tickWorld` flow (respect fallback boolean).
+	- [ ] Ensure vanilla chunk ticking resumes when scheduler reports false or worlds pause (reset skip flag appropriately).
+	- [ ] Audit additional server tick entry points (`MinecraftServerMixin`, dimension iteration) for scheduler bootstrap/shutdown hooks.
 - [ ] Port regionized world data holders (player/chunk/entity tracking) and ensure chunk load/unload hooks follow Folia logic.
+	- [ ] Port Folia `RegionizedWorldData` (entity lists, block events, redstone timers, spawn state, nearby player tracker).
+	- [ ] Store `RegionizedWorldData` on the `ServerWorld` mixin and proxy key queries (`getRegionizedData`, `getNearbyPlayers`).
+	- [ ] Replace Fabric chunk event handlers with regionized data-aware registration to avoid duplication and align with Folia merge/split callbacks.
 - [ ] Port task queues, scheduling helpers, and teleport utilities required by Folia threading.
+	- [ ] Port Folia `Schedule`, `TickData`, and related helpers that back `RegionScheduleHandle` timing APIs.
+	- [ ] Implement `RegionizedData` scaffolding for per-region state transfer across merges/splits.
+	- [ ] Port `TeleportUtils` and integrate with Fabric-friendly entity move handling.
 - [ ] Adapt entity/chunk managers and mixins to enforce thread ownership checks as Folia does.
+	- [ ] Port `RegionizedServer` thread ownership helpers and expose on server/world mixins.
+	- [ ] Patch chunk/entity managers to assert current region/thread before mutating shared state.
+	- [ ] Audit remaining mixins for synchronous assumptions and gate them behind region thread checks.
 - [x] Configure Gradle/tooling to default to Java 21 so builds do not require manual `JAVA_HOME` overrides in the container.
 - [x] Validate compilation, resolve mixin target signatures, and address refmap generation.
 - [ ] Smoke-test dedicated server launch for regressions in region handling and general tick stability.
+
+- [ ] Port per-region networking loop (connection tick, disconnect handling, broadcast queue) and integrate with Fabric network events.
 
 - [ ] Add regression tests covering RegionTickData task queue migration across merges/splits and schedule handle reuse.
 - [ ] Add integration coverage for RegionTaskDispatcher current-region scheduling fallbacks.
