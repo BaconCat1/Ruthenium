@@ -91,6 +91,22 @@ public final class TickRegionScheduler {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
         requireRegionizer(world);
+        // If the scheduler has been halted (shutdown or fatal error), fall back to vanilla ticking.
+        if (this.halted.get()) {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler halted; falling back to vanilla world tick for {}", world.getRegistryKey().getValue());
+            return false;
+        }
+
+        // If the server indicates it should stop ticking (shutdown path), allow vanilla/main-thread shutdown to proceed.
+        if (!shouldKeepTicking.getAsBoolean()) {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Server requested stop-ticking; allowing vanilla tick for {}", world.getRegistryKey().getValue());
+            return false;
+        }
+
+        // At this stage, the scheduler is active and the server wants to keep ticking. The region scheduler
+        // will drive chunk ticks on region threads; signal the mixin to skip vanilla per-chunk ticking.
+        // Note: finer-grained pumping (handling pending main-thread tasks) will be implemented later
+        // once scheduler APIs for main-thread task draining are available.
         return true;
     }
 
