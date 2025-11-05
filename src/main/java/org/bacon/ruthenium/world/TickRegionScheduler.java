@@ -131,13 +131,11 @@ public final class TickRegionScheduler {
         final RegionizedWorldData worldData = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
         final long tickStart = System.nanoTime();
         final RunningTick runningTick = this.watchdog.track(world, null, Thread.currentThread(), tickStart);
-        worldData.setHandlingTick(true);
-        worldData.updateTickData();
+        worldData.beginTick(shouldKeepTicking);
         this.currentWorldData.set(worldData);
         boolean drainedTasks = false;
         boolean fallback = false;
         try {
-            worldData.tickGlobalServices(shouldKeepTicking);
             drainedTasks = drainRegionTasks(regionizer, world, shouldKeepTicking);
             if (this.halted.get()) {
                 RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
@@ -155,7 +153,7 @@ public final class TickRegionScheduler {
         } finally {
             this.watchdog.untrack(runningTick);
             this.currentWorldData.remove();
-            worldData.setHandlingTick(false);
+            worldData.finishTick();
             final long duration = System.nanoTime() - tickStart;
             this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
         }
@@ -265,6 +263,7 @@ public final class TickRegionScheduler {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = handle.getRegion();
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
+    final RegionizedWorldData worldData = getCurrentWorldData();
 
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, guard);
@@ -288,6 +287,9 @@ public final class TickRegionScheduler {
             }
 
             ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
+            if (worldData != null) {
+                worldData.markEntityTickingChunk(chunkX, chunkZ);
+            }
             try {
                 ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
                 tickedChunks++;
@@ -295,6 +297,9 @@ public final class TickRegionScheduler {
                 LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
             } finally {
                 ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
+                if (worldData != null) {
+                    worldData.unmarkEntityTickingChunk(chunkX, chunkZ);
+                }
             }
         }
 

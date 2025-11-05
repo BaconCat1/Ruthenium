@@ -12,9 +12,12 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import net.minecraft.server.world.ServerWorld;
 import org.bacon.ruthenium.util.CoordinateUtil;
-import org.bacon.ruthenium.world.TickRegionScheduler;
 import org.bacon.ruthenium.world.RegionTickStats;
+import org.bacon.ruthenium.world.RegionizedServerWorld;
+import org.bacon.ruthenium.world.RegionizedWorldData;
+import org.bacon.ruthenium.world.TickRegionScheduler;
 
 /**
  * Simple region data container that stores per-region tick counters.
@@ -129,10 +132,18 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
 
     public void addChunk(final int chunkX, final int chunkZ) {
         this.chunks.add(encodeChunk(chunkX, chunkZ));
+        final RegionizedWorldData worldData = this.resolveWorldData();
+        if (worldData != null) {
+            worldData.addChunk(chunkX, chunkZ);
+        }
     }
 
     public void removeChunk(final int chunkX, final int chunkZ) {
         this.chunks.remove(encodeChunk(chunkX, chunkZ));
+        final RegionizedWorldData worldData = this.resolveWorldData();
+        if (worldData != null) {
+            worldData.removeChunk(chunkX, chunkZ);
+        }
     }
 
     public LongSet getChunks() {
@@ -252,5 +263,16 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
 
     private static long encodeChunk(final int chunkX, final int chunkZ) {
         return (chunkX & 0xFFFFFFFFL) | ((chunkZ & 0xFFFFFFFFL) << 32);
+    }
+
+    private RegionizedWorldData resolveWorldData() {
+        if (this.region == null) {
+            return null;
+        }
+        final ServerWorld world = this.region.regioniser.world;
+        if (!(world instanceof RegionizedServerWorld regionized)) {
+            return null;
+        }
+        return regionized.ruthenium$getWorldRegionData();
     }
 }
