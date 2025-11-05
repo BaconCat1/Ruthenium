@@ -14,4 +14,11 @@ public interface RegionizedServerWorld {
      * @return the world-local regionizer
      */
     ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$getRegionizer();
+
+    /**
+     * Retrieves the regionized world data backing global world services.
+     *
+     * @return the world-level regionized data snapshot
+     */
+    RegionizedWorldData ruthenium$getWorldRegionData();
 }

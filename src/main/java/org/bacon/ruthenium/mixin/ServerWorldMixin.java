@@ -11,6 +11,7 @@ import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
 import org.bacon.ruthenium.world.TickRegionScheduler;
+import org.bacon.ruthenium.world.RegionizedWorldData;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -30,6 +31,9 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$regionizer;
 
     @Unique
+    private RegionizedWorldData ruthenium$worldRegionData;
+
+    @Unique
     private boolean ruthenium$skipVanillaChunkTick;
 
     @Unique
@@ -45,9 +49,20 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         return this.ruthenium$regionizer;
     }
 
+    @Override
+    public RegionizedWorldData ruthenium$getWorldRegionData() {
+        if (this.ruthenium$worldRegionData == null) {
+            this.ruthenium$worldRegionData = new RegionizedWorldData((ServerWorld)(Object)this);
+        }
+        return this.ruthenium$worldRegionData;
+    }
+
     @Inject(method = "tick", at = @At("HEAD"))
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
         RegionDebug.onWorldTick((ServerWorld)(Object)this);
+        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
+        worldData.setHandlingTick(true);
+        worldData.updateTickData();
         final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
         this.ruthenium$skipVanillaChunkTick = replaced;
     }
@@ -55,6 +70,10 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Inject(method = "tick", at = @At("TAIL"))
     private void ruthenium$finishRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
         this.ruthenium$skipVanillaChunkTick = false;
+        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
+        if (worldData.isHandlingTick()) {
+            worldData.setHandlingTick(false);
+        }
     }
 
     @Inject(method = "tickChunk", at = @At("HEAD"), cancellable = true)

@@ -53,6 +53,7 @@ public final class TickRegionScheduler {
 
     private final ThreadLocal<ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData>> currentRegion = new ThreadLocal<>();
     private final ThreadLocal<ServerWorld> currentWorld = new ThreadLocal<>();
+    private final ThreadLocal<RegionizedWorldData> currentWorldData = new ThreadLocal<>();
     private final ThreadLocal<RegionScheduleHandle> currentHandle = new ThreadLocal<>();
 
     static {
@@ -102,6 +103,10 @@ public final class TickRegionScheduler {
         return INSTANCE.currentWorld.get();
     }
 
+    public static RegionizedWorldData getCurrentWorldData() {
+        return INSTANCE.currentWorldData.get();
+    }
+
     public static RegionScheduleHandle getCurrentHandle() {
         return INSTANCE.currentHandle.get();
     }
@@ -123,11 +128,16 @@ public final class TickRegionScheduler {
         }
 
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
+        final RegionizedWorldData worldData = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
         final long tickStart = System.nanoTime();
         final RunningTick runningTick = this.watchdog.track(world, null, Thread.currentThread(), tickStart);
-    boolean drainedTasks = false;
+        worldData.setHandlingTick(true);
+        worldData.updateTickData();
+        this.currentWorldData.set(worldData);
+        boolean drainedTasks = false;
         boolean fallback = false;
         try {
+            worldData.tickGlobalServices(shouldKeepTicking);
             drainedTasks = drainRegionTasks(regionizer, world, shouldKeepTicking);
             if (this.halted.get()) {
                 RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
@@ -144,6 +154,8 @@ public final class TickRegionScheduler {
             return true;
         } finally {
             this.watchdog.untrack(runningTick);
+            this.currentWorldData.remove();
+            worldData.setHandlingTick(false);
             final long duration = System.nanoTime() - tickStart;
             this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
         }
@@ -163,6 +175,20 @@ public final class TickRegionScheduler {
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Deschedule region {} in world {}",
             handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
         this.scheduler.tryRetire(handle);
+    }
+
+    public boolean updateTickStartToMax(final RegionScheduleHandle handle, final long newStart) {
+        Objects.requireNonNull(handle, "handle");
+        final boolean adjusted = this.scheduler.updateTickStartToMax(handle, newStart);
+        if (adjusted) {
+            handle.onScheduledStartAdjusted(newStart);
+        }
+        return adjusted;
+    }
+
+    public void notifyRegionTasks(final RegionScheduleHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        this.scheduler.notifyTasks(handle);
     }
 
     private boolean drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
@@ -220,12 +246,18 @@ public final class TickRegionScheduler {
                             final ServerWorld world, final RegionScheduleHandle handle) {
         this.currentRegion.set(region);
         this.currentWorld.set(world);
+        if (world instanceof RegionizedServerWorld regionized) {
+            this.currentWorldData.set(regionized.ruthenium$getWorldRegionData());
+        } else {
+            this.currentWorldData.set(null);
+        }
         this.currentHandle.set(handle);
     }
 
     void exitRegionContext() {
         this.currentHandle.remove();
         this.currentWorld.remove();
+        this.currentWorldData.remove();
         this.currentRegion.remove();
     }
 
@@ -309,6 +341,14 @@ public final class TickRegionScheduler {
         LOGGER.error("Region {} in world {} failed during tick", region.id, world.getRegistryKey().getValue(), throwable);
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
             "Region {} failed during tick: {}", region.id, String.valueOf(throwable.getMessage()));
+        if (this.halted.compareAndSet(false, true)) {
+            this.watchdog.shutdown();
+            this.scheduler.halt(false, 0L);
+        }
+        final MinecraftServer server = world.getServer();
+        if (server != null) {
+            RegionShutdownThread.requestShutdown(server, this);
+        }
         handle.markNonSchedulable();
     }
 
@@ -445,7 +485,7 @@ public final class TickRegionScheduler {
         this.scheduler.halt(false, 0L);
         final MinecraftServer server = world.getServer();
         if (server != null) {
-            server.stop(false);
+            RegionShutdownThread.requestShutdown(server, this);
         }
     }
 
@@ -484,6 +524,7 @@ public final class TickRegionScheduler {
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private long lastTickStart = SchedulerThreadPool.DEADLINE_NOT_SET;
         private final RegionTickStats tickStats = new RegionTickStats();
+    private final Schedule tickSchedule;
 
         private RegionScheduleHandle(final TickRegionScheduler scheduler,
                                      final RegionTickData data,
@@ -491,7 +532,8 @@ public final class TickRegionScheduler {
             this.scheduler = scheduler;
             this.data = data;
             this.region = region;
-            this.setScheduledStart(SchedulerThreadPool.DEADLINE_NOT_SET);
+            this.tickSchedule = new Schedule(SchedulerThreadPool.DEADLINE_NOT_SET);
+            this.updateScheduledStartInternal(SchedulerThreadPool.DEADLINE_NOT_SET);
         }
 
         public RegionTickData getData() {
@@ -517,12 +559,14 @@ public final class TickRegionScheduler {
         public void copyStateFrom(final RegionScheduleHandle other) {
             this.lastTickStart = other.lastTickStart;
             this.tickStats.copyFrom(other.tickStats);
+            this.updateScheduledStartInternal(other.getScheduledStart());
+            this.tickSchedule.setLastPeriod(other.tickSchedule.getLastPeriod());
         }
 
         void prepareForActivation() {
             this.cancelled.set(false);
             if (this.getScheduledStart() == SchedulerThreadPool.DEADLINE_NOT_SET) {
-                this.setScheduledStart(System.nanoTime() + TICK_INTERVAL_NANOS);
+                this.updateScheduledStartInternal(System.nanoTime() + TICK_INTERVAL_NANOS);
             }
         }
 
@@ -551,6 +595,12 @@ public final class TickRegionScheduler {
             final ServerWorld world = this.getWorld();
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable();
             final long tickStart = System.nanoTime();
+            final int tickCount;
+            if (this.tickSchedule.getLastPeriod() == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                tickCount = 1;
+            } else {
+                tickCount = Math.max(1, this.tickSchedule.getPeriodsAhead(TICK_INTERVAL_NANOS, tickStart));
+            }
             final RunningTick runningTick = this.scheduler == null ? null
                 : this.scheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
 
@@ -591,8 +641,10 @@ public final class TickRegionScheduler {
             }
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick end region {}: {} ms", this.region.id, (duration / 1_000_000.0D));
-            final long nextStart = TimeUtil.getGreatestTime(tickStart + TICK_INTERVAL_NANOS, tickEnd);
-            this.setScheduledStart(nextStart);
+            this.tickSchedule.advanceBy(tickCount, TICK_INTERVAL_NANOS);
+            final long scheduledDeadline = this.tickSchedule.getDeadline(TICK_INTERVAL_NANOS);
+            final long nextStart = TimeUtil.getGreatestTime(tickEnd, scheduledDeadline);
+            this.updateScheduledStartInternal(nextStart);
             return !this.isMarkedNonSchedulable();
         }
 
@@ -628,6 +680,23 @@ public final class TickRegionScheduler {
 
         public RegionTickStats getTickStats() {
             return this.tickStats;
+        }
+
+        private void updateScheduledStartInternal(final long scheduledStart) {
+            this.setScheduledStart(scheduledStart);
+            if (scheduledStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                this.tickSchedule.setLastPeriod(scheduledStart);
+            } else {
+                this.tickSchedule.setLastPeriod(scheduledStart - TICK_INTERVAL_NANOS);
+            }
+        }
+
+        private void onScheduledStartAdjusted(final long newStart) {
+            if (newStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                this.tickSchedule.setLastPeriod(newStart);
+            } else {
+                this.tickSchedule.setLastPeriod(newStart - TICK_INTERVAL_NANOS);
+            }
         }
     }
 }

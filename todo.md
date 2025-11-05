@@ -57,3 +57,6 @@
 - TeleportUtils, Schedule, TickData helpers
 - Region task/queue infrastructure (chunk unload queue, holder manager hooks)
 - Coordinate/TickThread utility dependencies from Moonrise/concurrentutil
+
+
+Flesh out RegionizedWorldData.tickGlobalServices with the remaining Folia world-border/weather/time plumbing once the necessary accessor mixins are in place.
