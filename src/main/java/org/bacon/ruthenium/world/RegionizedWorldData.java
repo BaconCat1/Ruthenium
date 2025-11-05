@@ -9,6 +9,7 @@ import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.village.raid.RaidManager;
+import org.bacon.ruthenium.mixin.accessor.RaidManagerThreadSafe;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.util.CoordinateUtil;
 
@@ -148,12 +149,12 @@ public final class RegionizedWorldData {
             return;
         }
 
-    this.tickWeather();
+        this.tickWeather();
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
         }
 
-    this.updateSleepingPlayers();
+        this.updateSleepingPlayers();
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
         }
@@ -203,7 +204,11 @@ public final class RegionizedWorldData {
 
     private void tickRaids() {
         final RaidManager raidManager = this.world.getRaidManager();
-        raidManager.tick(this.world);
+        if (raidManager instanceof RaidManagerThreadSafe threadSafe) {
+            threadSafe.ruthenium$globalTick();
+        } else {
+            raidManager.tick(this.world);
+        }
     }
 
     private void tickTime() {

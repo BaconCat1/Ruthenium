@@ -303,6 +303,8 @@ public final class TickRegionScheduler {
             }
         }
 
+        world.getRaidManager().tick(world);
+
         processedTasks += runQueuedTasks(data, region, guard);
         data.advanceCurrentTick();
         data.advanceRedstoneTick();

@@ -4,11 +4,15 @@ import java.util.function.BooleanSupplier;
 
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.village.raid.Raid;
+import net.minecraft.village.raid.RaidManager;
 import net.minecraft.world.World;
 import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
+import org.bacon.ruthenium.mixin.accessor.RaidManagerThreadSafe;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 import org.bacon.ruthenium.world.RegionizedWorldData;
@@ -18,6 +22,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import net.minecraft.world.chunk.WorldChunk;
 
@@ -73,6 +78,14 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
         if (worldData.isHandlingTick()) {
             worldData.setHandlingTick(false);
+        }
+    }
+
+    @Inject(method = "getRaidAt", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$threadSafeRaidLookup(final BlockPos pos, final CallbackInfoReturnable<Raid> cir) {
+        final RaidManager raidManager = ((ServerWorld)(Object)this).getRaidManager();
+        if (raidManager instanceof RaidManagerThreadSafe threadSafe) {
+            cir.setReturnValue(threadSafe.ruthenium$getRaidFor((ServerWorld)(Object)this, pos, 9216));
         }
     }
 
