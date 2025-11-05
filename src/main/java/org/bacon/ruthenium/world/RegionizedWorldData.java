@@ -9,8 +9,8 @@ import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.village.raid.RaidManager;
-import org.bacon.ruthenium.mixin.accessor.RaidManagerThreadSafe;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
+import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
 import org.bacon.ruthenium.util.CoordinateUtil;
 
 /**
