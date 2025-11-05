@@ -1,11 +1,13 @@
 package org.bacon.ruthenium;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.bacon.ruthenium.command.RegionCommand;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.RegionizerConfig;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
@@ -32,10 +34,17 @@ public final class Ruthenium implements ModInitializer {
             .sectionChunkShift(4)
             .build();
 
+    private static volatile boolean REGION_DEBUG_LOGGING = false;
+
     @Override
     public void onInitialize() {
         LOGGER.info("Initializing Ruthenium regionizer defaults (section shift={}, merge radius={})",
             DEFAULT_CONFIG.getSectionChunkShift(), DEFAULT_CONFIG.getMergeRadius());
+
+        // Register commands
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            RegionCommand.register(dispatcher);
+        });
 
         ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
             final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
@@ -76,6 +85,21 @@ public final class Ruthenium implements ModInitializer {
      */
     public static Logger getLogger() {
         return LOGGER;
+    }
+
+    /**
+     * Returns whether region lifecycle debug logging is enabled.
+     */
+    public static boolean isRegionDebugLoggingEnabled() {
+        return REGION_DEBUG_LOGGING;
+    }
+
+    /**
+     * Enables or disables region lifecycle debug logging.
+     */
+    public static void setRegionDebugLoggingEnabled(final boolean enabled) {
+        REGION_DEBUG_LOGGING = enabled;
+        LOGGER.info("Region debug logging {}", enabled ? "enabled" : "disabled");
     }
 
     private static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> requireRegionizer(final ServerWorld world) {

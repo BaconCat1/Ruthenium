@@ -6,6 +6,7 @@ import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.World;
 import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
@@ -46,7 +47,8 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "tick", at = @At("HEAD"))
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
-    final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
+        RegionDebug.onWorldTick((ServerWorld)(Object)this);
+        final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
         this.ruthenium$skipVanillaChunkTick = replaced;
     }
 
