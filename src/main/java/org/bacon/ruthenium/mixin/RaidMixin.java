@@ -27,7 +27,7 @@ public abstract class RaidMixin implements RaidThreadSafe {
     @Shadow public abstract BlockPos getCenter();
 
     @Overwrite
-    private java.util.function.Predicate<ServerPlayerEntity> validPlayer() {
+    private java.util.function.Predicate<ServerPlayerEntity> isInRaidDistance() {
         return player -> {
             if (player == null || !player.isAlive()) {
                 return false;

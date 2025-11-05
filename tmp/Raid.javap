@@ -1,0 +1,45 @@
+Compiled from "Raid.java"
+public class net.minecraft.village.raid.Raid {
+  public static final net.minecraft.entity.SpawnLocation RAVAGER_SPAWN_LOCATION;
+  public static final com.mojang.serialization.MapCodec<net.minecraft.village.raid.Raid> CODEC;
+  public static final int field_30669;
+  public static final int MAX_DESPAWN_COUNTER;
+  public static final int field_30671;
+  public static final int field_30672;
+  public static final int field_30673;
+  public static final int field_30674;
+  public static final int SQUARED_MAX_RAIDER_DISTANCE;
+  public net.minecraft.village.raid.Raid(net.minecraft.util.math.BlockPos, net.minecraft.world.Difficulty);
+  public boolean isFinished();
+  public boolean isPreRaid();
+  public boolean hasSpawned();
+  public boolean hasStopped();
+  public boolean hasWon();
+  public boolean hasLost();
+  public float getTotalHealth();
+  public java.util.Set<net.minecraft.entity.raid.RaiderEntity> getAllRaiders();
+  public boolean hasStarted();
+  public int getGroupsSpawned();
+  public int getMaxAcceptableBadOmenLevel();
+  public int getBadOmenLevel();
+  public void setBadOmenLevel(int);
+  public boolean start(net.minecraft.server.network.ServerPlayerEntity);
+  public void invalidate();
+  public void tick(net.minecraft.server.world.ServerWorld);
+  public void addRaider(net.minecraft.server.world.ServerWorld, int, net.minecraft.entity.raid.RaiderEntity, net.minecraft.util.math.BlockPos, boolean);
+  public void updateBar();
+  public float getCurrentRaiderHealth();
+  public int getRaiderCount();
+  public void removeFromWave(net.minecraft.server.world.ServerWorld, net.minecraft.entity.raid.RaiderEntity, boolean);
+  public static net.minecraft.item.ItemStack createOminousBanner(net.minecraft.registry.RegistryEntryLookup<net.minecraft.block.entity.BannerPattern>);
+  public net.minecraft.entity.raid.RaiderEntity getCaptain(int);
+  public boolean addToWave(net.minecraft.server.world.ServerWorld, int, net.minecraft.entity.raid.RaiderEntity, boolean);
+  public void setWaveCaptain(int, net.minecraft.entity.raid.RaiderEntity);
+  public void removeLeader(int);
+  public net.minecraft.util.math.BlockPos getCenter();
+  public boolean isActive();
+  public int getMaxWaves(net.minecraft.world.Difficulty);
+  public float getEnchantmentChance();
+  public void addHero(net.minecraft.entity.Entity);
+  static {};
+}
