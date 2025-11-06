@@ -65,9 +65,6 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Inject(method = "tick", at = @At("HEAD"))
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
         RegionDebug.onWorldTick((ServerWorld)(Object)this);
-        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
-        worldData.setHandlingTick(true);
-        worldData.updateTickData();
         final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
         this.ruthenium$skipVanillaChunkTick = replaced;
     }

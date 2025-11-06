@@ -32,7 +32,7 @@ public final class RegionizedWorldData {
     private final LongSet entityTickingChunks = new LongOpenHashSet();
     private volatile boolean handlingTick;
     private volatile long lagCompensationTick;
-    private long redstoneGameTime = 1L;
+    private long redstoneGameTime;
     private int wakeupInactiveRemainingAnimals;
     private int wakeupInactiveRemainingFlying;
     private int wakeupInactiveRemainingMonsters;
@@ -40,6 +40,7 @@ public final class RegionizedWorldData {
 
     public RegionizedWorldData(final ServerWorld world) {
         this.world = Objects.requireNonNull(world, "world");
+        this.redstoneGameTime = world.getTime();
     }
 
     public ServerWorld getWorld() {
@@ -171,7 +172,7 @@ public final class RegionizedWorldData {
             return;
         }
 
-    this.tickTime();
+        this.tickTime();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
     }
 

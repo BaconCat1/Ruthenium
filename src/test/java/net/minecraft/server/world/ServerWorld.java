@@ -19,12 +19,20 @@ public class ServerWorld implements RegionizedServerWorld {
     private final RegistryKey<World> registryKey;
     private final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer;
     private final RegionizedWorldData worldData;
+    private long time;
 
     public ServerWorld(final RegistryKey<World> registryKey,
                        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer) {
-    this.registryKey = registryKey;
-    this.regionizer = regionizer;
-    this.worldData = new RegionizedWorldData(this);
+        this(registryKey, regionizer, 0L);
+    }
+
+    public ServerWorld(final RegistryKey<World> registryKey,
+                       final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
+                       final long time) {
+        this.registryKey = registryKey;
+        this.regionizer = regionizer;
+        this.time = time;
+        this.worldData = new RegionizedWorldData(this);
     }
 
     @Override
@@ -39,6 +47,14 @@ public class ServerWorld implements RegionizedServerWorld {
 
     public RegistryKey<World> getRegistryKey() {
         return this.registryKey;
+    }
+
+    public long getTime() {
+        return this.time;
+    }
+
+    public void setTime(final long time) {
+        this.time = time;
     }
 
     public List<ServerPlayerEntity> getPlayers() {

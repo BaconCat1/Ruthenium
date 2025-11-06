@@ -17,7 +17,7 @@
 	- [x] Track per-region tick duration statistics and expose debug hooks (command/log surface).
 		- [x] Capture rolling tick duration metrics per region schedule handle.
 		- [x] Expose metrics via debug commands/logging surfaces.
-	- [ ] Implement RegionizedWorldData-backed world tick pump (connection ticks, mob/time state, chunk tick lists).
+	- [x] Implement RegionizedWorldData-backed world tick pump (connection ticks, mob/time state, chunk tick lists).
 		- [x] Instantiate and cache `RegionizedWorldData` from `ServerWorld` mixin.
 		- [x] Tick player connection services via `tickGlobalServices` during world orchestration.
 		- [x] Mirror global world services (weather, raids, world border, time) through `RegionizedWorldData`.

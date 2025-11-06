@@ -60,17 +60,19 @@ public final class RegionThreadUtil {
 
     public static boolean ownsPosition(final ServerWorld world, final BlockPos pos, final int radius) {
         Objects.requireNonNull(pos, "pos");
-    final int chunkX = pos.getX() >> 4;
-    final int chunkZ = pos.getZ() >> 4;
-    return ownsChunk(world, chunkX, chunkZ, radius);
+        final int chunkX = pos.getX() >> 4;
+        final int chunkZ = pos.getZ() >> 4;
+        return ownsChunk(world, chunkX, chunkZ, radius);
     }
 
     public static boolean ownsPlayer(final ServerPlayerEntity player, final int radius) {
         if (player == null) {
             return false;
         }
-    final ServerWorld world = TickRegionScheduler.getCurrentWorld();
-    if (world == null) return false;
+        final ServerWorld world = TickRegionScheduler.getCurrentWorld();
+        if (world == null) {
+            return false;
+        }
         final ChunkPos pos = player.getChunkPos();
         return ownsChunk(world, pos.x, pos.z, radius);
     }

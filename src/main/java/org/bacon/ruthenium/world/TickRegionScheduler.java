@@ -269,7 +269,7 @@ public final class TickRegionScheduler {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = handle.getRegion();
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
-    final RegionizedWorldData worldData = getCurrentWorldData();
+        final RegionizedWorldData worldData = getCurrentWorldData();
 
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, guard);
@@ -308,8 +308,6 @@ public final class TickRegionScheduler {
                 }
             }
         }
-
-        world.getRaidManager().tick(world);
 
         processedTasks += runQueuedTasks(data, region, guard);
         data.advanceCurrentTick();
