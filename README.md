@@ -100,6 +100,17 @@ Note: You don’t need to schedule region ticks yourself—Ruthenium installs a 
   - Region size (sections, chunks)
   - Tick stats: TPS, average MSPT, last/min/max over a rolling window
   - Whether there are tasks queued for the region
+- /region logging: Enables or disables category-based debug output (`lifecycle`, `movement`, `scheduler`) with `on`, `off`, `toggle`, `status`, or `category <name> <on|off|toggle|status>`.
+
+## Logging
+
+- Debug output is opt-in. Use `/region logging` to flip all categories or target `lifecycle`, `movement`, and `scheduler` individually. The legacy API `Ruthenium.setRegionDebugLoggingEnabled(true|false)` still toggles every category at once for programmatic control.
+- Scheduler logs can be dialed in with JVM properties (defaults in parentheses):
+  - `-Druthenium.scheduler.logFallback=true|false` (true) – emit `INFO` lines when Ruthenium defers to vanilla ticking.
+  - `-Druthenium.scheduler.logFallbackStackTraces=true|false` (false) – include stack traces alongside fallback notices.
+  - `-Druthenium.scheduler.logDrainedTasks=true|false` (false) – log when the main thread flushes queued region tasks.
+  - `-Druthenium.scheduler.logRegionSummaries=true|false` (false) – log per-region tick summaries after each run.
+  - `-Druthenium.scheduler.logTaskQueueProcessing=true|false` (false) – log batch counts for per-region task queues.
 
 ## Configuration overview
 
@@ -132,7 +143,7 @@ src/
 
 ## License
 
-- Apache 2.0. See LICENSE.txt.
+- This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 ## Contributing
 

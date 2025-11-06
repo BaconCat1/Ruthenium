@@ -51,6 +51,9 @@ public final class RegionDebug {
         synchronized (ENABLED) {
             ENABLED.remove(category);
         }
+        if (category == LogCategory.MOVEMENT) {
+            LAST_PLAYER_REGION.clear();
+        }
         Ruthenium.getLogger().info("Region debug category {} disabled", category);
     }
 
@@ -65,11 +68,22 @@ public final class RegionDebug {
                 enabled = true;
             }
         }
+        if (!enabled && category == LogCategory.MOVEMENT) {
+            LAST_PLAYER_REGION.clear();
+        }
         Ruthenium.getLogger().info("Region debug category {} toggled {}", category, enabled ? "on" : "off");
         return enabled;
     }
 
     public static void setAll(final boolean on) {
+        setAllInternal(on, true);
+    }
+
+    public static void setAllQuietly(final boolean on) {
+        setAllInternal(on, false);
+    }
+
+    private static void setAllInternal(final boolean on, final boolean announce) {
         synchronized (ENABLED) {
             ENABLED.clear();
             if (on) {
@@ -78,7 +92,10 @@ public final class RegionDebug {
                 ENABLED.add(LogCategory.SCHEDULER);
             }
         }
-        Ruthenium.getLogger().info("Region debug logging {} for all categories", on ? "enabled" : "disabled");
+        LAST_PLAYER_REGION.clear();
+        if (announce) {
+            Ruthenium.getLogger().info("Region debug logging {} for all categories", on ? "enabled" : "disabled");
+        }
     }
 
     public static String statusLine() {
@@ -89,6 +106,12 @@ public final class RegionDebug {
         return "Lifecycle=" + (snapshot.contains(LogCategory.LIFECYCLE) ? "on" : "off") +
                ", Movement=" + (snapshot.contains(LogCategory.MOVEMENT) ? "on" : "off") +
                ", Scheduler=" + (snapshot.contains(LogCategory.SCHEDULER) ? "on" : "off");
+    }
+
+    public static boolean anyEnabled() {
+        synchronized (ENABLED) {
+            return !ENABLED.isEmpty();
+        }
     }
 
     public static void log(final LogCategory category, final String message, final Object... args) {

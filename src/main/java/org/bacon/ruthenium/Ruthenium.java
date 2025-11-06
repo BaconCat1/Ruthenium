@@ -8,6 +8,7 @@ import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.command.RegionCommand;
+import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.RegionizerConfig;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
@@ -33,8 +34,6 @@ public final class Ruthenium implements ModInitializer {
             .maxDeadSectionPercent(0.20D)
             .sectionChunkShift(4)
             .build();
-
-    private static volatile boolean REGION_DEBUG_LOGGING = false;
 
     @Override
     public void onInitialize() {
@@ -91,14 +90,14 @@ public final class Ruthenium implements ModInitializer {
      * Returns whether region lifecycle debug logging is enabled.
      */
     public static boolean isRegionDebugLoggingEnabled() {
-        return REGION_DEBUG_LOGGING;
+        return RegionDebug.anyEnabled();
     }
 
     /**
      * Enables or disables region lifecycle debug logging.
      */
     public static void setRegionDebugLoggingEnabled(final boolean enabled) {
-        REGION_DEBUG_LOGGING = enabled;
+        RegionDebug.setAllQuietly(enabled);
         LOGGER.info("Region debug logging {}", enabled ? "enabled" : "disabled");
     }
 
