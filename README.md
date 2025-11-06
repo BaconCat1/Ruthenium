@@ -1,3 +1,7 @@
+# WARNING
+
+This project is not complete. In its current state, it will likely make performance worse, cause crashes, and world corruption is possible.
+
 # Ruthenium
 
 Ruthenium is a Fabric mod library that replaces the vanilla chunk tick loop with a Folia‑inspired, region‑based scheduler. It partitions the world into independent ticking regions and runs them on a small pool of threads while preserving Minecraft’s game logic.

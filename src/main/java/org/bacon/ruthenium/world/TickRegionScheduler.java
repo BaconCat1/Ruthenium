@@ -151,6 +151,7 @@ public final class TickRegionScheduler {
                 fallback = true;
                 return false;
             }
+            worldData.populateChunkState(shouldKeepTicking);
             return true;
         } finally {
             this.watchdog.untrack(runningTick);

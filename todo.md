@@ -22,7 +22,7 @@
 		- [x] Tick player connection services via `tickGlobalServices` during world orchestration.
 		- [x] Mirror global world services (weather, raids, world border, time) through `RegionizedWorldData`.
 		- [x] Port Folia's thread-safe raid manager/global tick flow and swap `RegionizedWorldData.tickRaids` to the new entry point.
-		- [ ] Populate mob/chunk tracking lists and redstone timers to back per-region ticks.
+		- [x] Populate mob/chunk tracking lists and redstone timers to back per-region ticks.
 	- [ ] Mirror Folia RegionShutdownThread + failure escalation so scheduler halt propagates cleanly to the server watchdog.
 		- [x] Introduce shutdown thread scaffold and trigger it from scheduler failure paths.
 		- [ ] Halt chunk systems and finish pending teleports before final stop.

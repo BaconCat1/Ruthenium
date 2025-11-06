@@ -7,6 +7,8 @@
   "mixins": [
     "ServerWorldMixin",
     "accessor.ServerWorldAccessor",
+    "accessor.ServerChunkManagerAccessor",
+    "accessor.ServerChunkLoadingManagerAccessor",
     "CheckedRandomMixin"
   ],
   "injectors": {

@@ -1,5 +1,6 @@
 package org.bacon.ruthenium.world;
 
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import java.util.List;
@@ -8,8 +9,13 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.server.world.ServerChunkLoadingManager;
+import net.minecraft.server.world.ServerChunkManager;
+import net.minecraft.server.world.ChunkLevelManager;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.village.raid.RaidManager;
+import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
+import org.bacon.ruthenium.mixin.accessor.ServerChunkLoadingManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
 import org.bacon.ruthenium.util.CoordinateUtil;
@@ -165,7 +171,7 @@ public final class RegionizedWorldData {
             return;
         }
 
-        this.tickTime();
+    this.tickTime();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
     }
 
@@ -183,13 +189,62 @@ public final class RegionizedWorldData {
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
         }
-    final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
+        final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
         for (final ServerPlayerEntity player : players) {
             final ServerPlayNetworkHandler networkHandler = player.networkHandler;
             if (networkHandler != null) {
                 networkHandler.tick();
             }
         }
+    }
+
+    public void populateChunkState(final BooleanSupplier shouldKeepTicking) {
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+        final ServerChunkManager chunkManager = this.world.getChunkManager();
+        final ServerChunkLoadingManager loadingManager = ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
+
+        chunkManager.tick(shouldKeepTicking, false);
+        if (!shouldKeepTicking.getAsBoolean()) {
+            return;
+        }
+
+        final LongOpenHashSet newTicking = new LongOpenHashSet();
+        ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$forEachBlockTickingChunk(chunk -> {
+            final ChunkPos pos = chunk.getPos();
+            newTicking.add(CoordinateUtil.getChunkKey(pos.x, pos.z));
+        });
+
+        this.tickingChunks.clear();
+        final LongIterator tickingIterator = newTicking.iterator();
+        while (tickingIterator.hasNext()) {
+            this.tickingChunks.add(tickingIterator.nextLong());
+        }
+
+        final ChunkLevelManager levelManager = loadingManager.getLevelManager();
+        this.entityTickingChunks.clear();
+        final LongIterator entityIterator = newTicking.iterator();
+        while (entityIterator.hasNext()) {
+            final long chunkKey = entityIterator.nextLong();
+            final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+            final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+            if (levelManager.shouldTickEntities(ChunkPos.toLong(chunkX, chunkZ))) {
+                this.entityTickingChunks.add(chunkKey);
+            }
+        }
+
+        this.refreshMobWakeBudgets(newTicking.size());
+    }
+
+    private void refreshMobWakeBudgets(final int tickingChunkCount) {
+        final int base = Math.max(1, tickingChunkCount / 16);
+        final int monsters = Math.max(base * 2, 1);
+        final int animals = Math.max(base, 1);
+        final int flying = Math.max(base / 2, 1);
+        final int villagers = Math.max(base / 2, 1);
+        this.resetMobWakeupBudgets(animals, monsters, flying, villagers);
     }
 
     private void tickWorldBorder() {
