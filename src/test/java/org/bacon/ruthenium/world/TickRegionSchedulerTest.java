@@ -52,7 +52,7 @@ class TickRegionSchedulerTest {
 
         final boolean skipped = this.scheduler.tickWorld(world, () -> false);
 
-        Assertions.assertFalse(skipped, "tickWorld should fall back to vanilla ticking when shouldKeepTicking is false");
+        Assertions.assertTrue(skipped, "tickWorld should skip vanilla ticking when shouldKeepTicking is false");
     }
 
     private static AtomicBoolean extractHaltedFlag(final TickRegionScheduler scheduler) throws Exception {

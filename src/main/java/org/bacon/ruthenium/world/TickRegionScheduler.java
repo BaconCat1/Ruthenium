@@ -487,9 +487,10 @@ public final class TickRegionScheduler {
                                 final FallbackReason reason,
                                 final FallbackDiagnostics diagnostics) {
         final String detail = diagnostics == null ? "stage=unknown" : diagnostics.describe();
-        this.logFallbackMessage("Scheduler fallback: reason={} (world={}, {})",
-            reason.description(), describeWorld(world), detail);
-        return false;
+        final String action = reason.fallbackToVanilla() ? "Scheduler fallback" : "Scheduler skip";
+        this.logFallbackMessage("{}: reason={} (world={}, {})",
+            action, reason.description(), describeWorld(world), detail);
+        return !reason.fallbackToVanilla();
     }
 
     private FallbackDiagnostics buildDiagnostics(final ServerWorld world,
@@ -617,19 +618,25 @@ public final class TickRegionScheduler {
     }
 
     private enum FallbackReason {
-        SCHEDULER_HALTED_BEFORE_START("Scheduler halted before running world tick"),
-        SERVER_BUDGET_EXHAUSTED_BEFORE_START("Server requested stop-ticking before scheduler start"),
-        SCHEDULER_HALTED_DURING_TICK("Scheduler halted mid-tick"),
-        SERVER_BUDGET_EXHAUSTED_DURING_TICK("Server requested stop-ticking during scheduler pump");
+        SCHEDULER_HALTED_BEFORE_START("Scheduler halted before running world tick", true),
+        SERVER_BUDGET_EXHAUSTED_BEFORE_START("Server requested stop-ticking before scheduler start", false),
+        SCHEDULER_HALTED_DURING_TICK("Scheduler halted mid-tick", true),
+        SERVER_BUDGET_EXHAUSTED_DURING_TICK("Server requested stop-ticking during scheduler pump", false);
 
         private final String description;
+        private final boolean fallbackToVanilla;
 
-        FallbackReason(final String description) {
+        FallbackReason(final String description, final boolean fallbackToVanilla) {
             this.description = description;
+            this.fallbackToVanilla = fallbackToVanilla;
         }
 
         public String description() {
             return this.description;
+        }
+
+        public boolean fallbackToVanilla() {
+            return this.fallbackToVanilla;
         }
     }
 
