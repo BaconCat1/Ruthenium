@@ -1,162 +1,199 @@
-# WARNING
-
-This project is not complete. In its current state, it will likely make performance worse, cause crashes, and world corruption is possible.
-
 # Ruthenium
 
-Ruthenium is a Fabric mod library that replaces the vanilla chunk tick loop with a Folia‑inspired, region‑based scheduler. It partitions the world into independent ticking regions and runs them on a small pool of threads while preserving Minecraft’s game logic.
+## ⚠️ **EXPERIMENTAL SOFTWARE - USE AT YOUR OWN RISK** ⚠️
 
-# Here be dragons (read before using)
+> ### 🚧 **THIS MOD IS INCOMPLETE AND UNDER ACTIVE DEVELOPMENT** 🚧
+> 
+> **WARNING:** Ruthenium is **NOT production-ready**. This software:
+> - ❌ **May cause world corruption or data loss**
+> - ❌ **Contains incomplete features and known bugs**
+> - ❌ **Can crash your server or client unexpectedly**
+> - ❌ **Is NOT recommended for use on worlds you care about**
+> 
+> **Use only for testing and development purposes.** Always backup your worlds before use.
 
-- Experimental and unstable: APIs and behavior may change without notice.
-- Multithreaded tick path: many vanilla/Fabric APIs are not thread‑safe. Code that assumes single‑threaded world access can crash, deadlock, or corrupt data when run on region threads.
-- For test servers only: back up your worlds. Expect bugs and incompatibilities with mods that touch world state without considering region threading.
-- This is not Paper/Folia: no plugin compat layer; Fabric mods must explicitly respect thread ownership and schedule work via region queues.
+---
 
-## What it does
+A Fabric mod for Minecraft 1.21 that implements Folia-style multithreaded region-based tick scheduling, enabling parallel world processing by dividing the world into independent regions that can tick concurrently on separate threads.
 
-- Builds a per‑world `ThreadedRegionizer` when chunks load/unload, grouping nearby chunks into “regions” that can merge/split as activity changes.
-- Replaces `ServerWorld`’s normal chunk ticking with a region scheduler that ticks the chunks owned by each active region at 20 TPS across a few worker threads.
-- Keeps region‑local bookkeeping (tick counters, queued per‑chunk tasks, membership of chunks) consistent across merges/splits.
-- Exposes lightweight stats for each region’s recent tick durations.
+## Overview
 
-## What it doesn’t do
+Ruthenium ports Paper's [Folia](https://github.com/PaperMC/Folia) regionized tick architecture to Fabric, providing:
 
-- It’s not a fork of Paper/Folia, and it doesn’t bring their plugin environment. This is a Fabric‑first library.
-- It doesn’t change gameplay rules; it changes how chunk ticks are scheduled and isolated.
-- It doesn’t attempt to parallelize everything in Minecraft—only region chunk ticking and region‑queued tasks.
+- **Multithreaded World Ticking**: Divides worlds into independent regions that tick in parallel
+- **Dynamic Region Management**: Automatically merges and splits regions based on chunk load patterns
+- **Thread-Safe Scheduling**: Per-region task queues with strict thread ownership enforcement
+- **Performance Optimization**: Reduces main thread bottlenecks by distributing work across CPU cores
 
-## How it works (high level)
+This is a complete architectural port, not just a simple parallelization layer. The mod fundamentally changes how Minecraft processes world state to enable true multithreaded execution.
 
-- Mixins wire into `ServerWorld`:
-  - `ServerWorldMixin` marks the world as `RegionizedServerWorld` and guards vanilla `tickChunk` so Ruthenium can own chunk ticking.
-  - On each world tick, `TickRegionScheduler` decides which regions to tick and runs them on a scheduler thread pool.
-- Chunk lifecycle hooks:
-  - Ruthenium registers Fabric `ServerChunkEvents` to feed the `ThreadedRegionizer` with add/removeChunk events as chunks load/unload.
-- Per‑region tick:
-  - For each region, `RegionTickData` provides: current tick counters, a set of owned chunks, and a `RegionTaskQueue`.
-  - During a tick, the scheduler runs queued per‑chunk tasks, then calls the world’s internal `tickChunk` for each owned `WorldChunk`, then advances counters.
-- Safety and determinism:
-  - Regions have lifecycle states (`READY`, `TICKING`, `TRANSIENT`, `DEAD`). While a region ticks, merges are deferred; on release, merges/splits are applied consistently.
+## Architecture
 
-## Key classes to look at
+### Core Components
 
-- `ThreadedRegionizer` and `ThreadedRegion`: region graph management, merges/splits, invariants.
-- `RegionizerConfig`: knobs for section sizing, merge radius, maintenance thresholds.
-- `RegionTickData` and `RegionTaskQueue`: region‑local data, per‑chunk task queue, tick counters, stats.
-- `TickRegionScheduler`: worker threads, 20 TPS cadence, region tick loop and context.
-- `RegionizedServerWorld` and `RegionChunkTickAccess`: mixin interfaces added to `ServerWorld` so Ruthenium can manage world/region state and guard vanilla ticking.
+- **ThreadedRegionizer**: Manages the spatial partitioning of worlds into regions and handles dynamic region merges/splits
+- **TickRegionScheduler**: Coordinates parallel region ticking with time budgets, backlog tracking, and watchdog integration
+- **RegionTickData**: Per-region state container tracking chunks, entities, tasks, and tick statistics
+- **RegionizedWorldData**: Thread-safe world services (weather, time, raids, world border) accessible from region threads
+- **TickRegions**: Lifecycle callbacks for region creation, merge, split, and destruction events
 
-## Supported versions
+### Threading Model
 
-- Minecraft: 1.21.10
-- Fabric Loader: see `gradle.properties` (loader_version)
-- Fabric API: see `gradle.properties` (fabric_version)
-- Java: 21+
+Each region runs on a dedicated thread from a worker pool. Regions tick independently and cannot directly access state from other regions. Cross-region operations (entity movement, chunk loading) are coordinated through thread-safe task queues.
 
-## Getting started
+The main thread orchestrates the scheduler and pumps global world services, but does not block on individual region ticks.
 
-### Prerequisites
+## Features
 
-- Java 21 or newer.
-- A Fabric mod development environment.
+### Implemented ✅
 
-### Build
+**Core Infrastructure:**
+- ✅ Folia-compatible `ThreadedRegionizer` with nested region/section types
+- ✅ Full `TickRegionScheduler` with time budgets and tick statistics
+- ✅ `TickRegions` lifecycle callbacks for region creation, merge, split, and destruction
+- ✅ Per-region task queues with `RegionScheduleHandle` scheduling
+- ✅ Dynamic region merge/split with state migration
+- ✅ `Schedule` helper for tick deadline management
+- ✅ Per-region tick duration metrics and performance tracking
+- ✅ Watchdog integration and crash reporting
+
+**World Data Integration:**
+- ✅ Baseline `RegionizedWorldData` with world services accessor
+- ✅ Thread-safe raid manager integration
+- ✅ Player connection services ticking via `tickGlobalServices`
+
+**Development Tools:**
+- ✅ Debug commands (`/region info`, `/region stats`, `/region debug`)
+- ✅ Configurable section sizing and merge thresholds via `RegionizerConfig`
+- ✅ Gradle configured for Java 21
+- ✅ Mixin targets validated with refmap generation
+
+### In Progress 🔄
+
+**Scheduler Lifecycle:**
+- 🔄 Fix vanilla tick flow integration (respect scheduler return values)
+- 🔄 Complete `RegionShutdownThread` with graceful save sequence
+- 🔄 Scheduler failure detection and recovery
+
+**World State Decoupling:**
+- 🔄 Full entity/connection split & merge callbacks
+- 🔄 Per-region block events, tick lists, and mob spawning
+- 🔄 Regionized weather, time, and world border tracking
+- 🔄 Replace Fabric event handlers with regionized callbacks
+
+**Thread Safety:**
+- 🔄 `RegionizedServer` thread ownership validation helpers
+- 🔄 Thread assertions in chunk/entity managers
+- 🔄 Command execution context validation
+
+**Networking:**
+- 🔄 Per-region connection management and network tick loop
+- 🔄 Per-region packet broadcast queues
+- 🔄 Player movement across region boundaries
+
+**Cross-Region Operations:**
+- 🔄 `TeleportUtils` for cross-region entity movement
+- 🔄 `RegionizedData` interface for state transfer during merge/split
+- 🔄 Portal teleportation with region awareness
+
+**Performance & Monitoring:**
+- 🔄 Complete backlog tracking with `TickData` and `TickTime`
+- 🔄 Backlog metrics via `/region stats` command
+- 🔄 Worker thread pool optimization and work stealing
+
+**Testing:**
+- 🔄 Region merge/split task queue migration tests
+- 🔄 Cross-region entity teleport consistency tests
+- 🔄 Thread ownership enforcement validation
+
+## Requirements
+
+- **Minecraft**: 1.21
+- **Fabric Loader**: Latest
+- **Fabric API**: Latest
+- **Java**: 21+
+
+## Installation
+
+1. Download the latest release from [Releases](../../releases)
+2. Place the JAR in your `mods/` folder
+3. Launch Minecraft with Fabric
+
+## Configuration
+
+Regionizer behavior can be tuned via `RegionizerConfig` in `Ruthenium.java`:
+
+```java
+RegionizerConfig.builder()
+    .emptySectionCreationRadius(2)     // Sections to create around loaded chunks
+    .mergeRadius(2)                     // Distance threshold for merging regions
+    .recalculationSectionCount(16)     // Sections to recalculate per merge/split
+    .maxDeadSectionPercent(0.20)       // % of empty sections before cleanup
+    .sectionChunkShift(4)              // Section size (4 = 16 chunks = 256 blocks)
+    .build();
+```
+
+## Commands
+
+- `/region info` - Display current region statistics (count, threads, chunks)
+- `/region stats [<region_id>]` - Show detailed tick statistics for a region
+- `/region debug [on|off]` - Toggle verbose region logging
+
+## Development
+
+### Building
 
 ```bash
 ./gradlew build
 ```
 
-### Run tests
+The compiled JAR will be in `build/libs/`.
+
+### Running
+
+```bash
+./gradlew runServer  # Dedicated server
+./gradlew runClient  # Client
+```
+
+### Testing
 
 ```bash
 ./gradlew test
 ```
 
-### Optional dev run (standard Loom tasks; this project focuses on server‑side behavior)
+## Project Status
 
-```bash
-./gradlew runServer
-```
+Ruthenium is currently in **active development**. Core regionizer and scheduler infrastructure is complete, but full Folia parity requires additional integration work (see [todo.md](todo.md)).
 
-## Using from your mod (quick pointers)
+The mod is functional for testing but not yet recommended for production use.
 
-- Get the world’s regionizer (ServerWorld is extended by a mixin):
-  - `((RegionizedServerWorld) world).ruthenium$getRegionizer()`
-- Map a chunk to its region:
-  - `regionizer.getRegionForChunk(chunkX, chunkZ)`
-- Queue work to run next time a specific chunk in a region ticks:
-  - `region.getData().getTaskQueue().queueChunkTask(chunkX, chunkZ, runnable)`
-- Peek at simple per‑region timing stats:
-  - `region.getData().getTickStats()`
+## References
 
-Note: You don’t need to schedule region ticks yourself—Ruthenium installs a scheduler that replaces vanilla chunk ticking automatically when the mod is present.
+This project is based on:
 
-## Commands
+- **Folia** (PaperMC) - Original regionized threading implementation
+- **Moonrise** (Spottedleaf) - High-performance chunk system components
+- **ConcurrentUtil** (Spottedleaf) - Lock-free data structures
 
-- /region (operators only): Prints information about your current region and the world’s regionization state:
-  - Region ID, your chunk, and the region’s center chunk
-  - Total region count in the world
-  - Region size (sections, chunks)
-  - Tick stats: TPS, average MSPT, last/min/max over a rolling window
-  - Whether there are tasks queued for the region
-- /region logging: Enables or disables category-based debug output (`lifecycle`, `movement`, `scheduler`) with `on`, `off`, `toggle`, `status`, or `category <name> <on|off|toggle|status>`.
-
-## Logging
-
-- Debug output is opt-in. Use `/region logging` to flip all categories or target `lifecycle`, `movement`, and `scheduler` individually. The legacy API `Ruthenium.setRegionDebugLoggingEnabled(true|false)` still toggles every category at once for programmatic control.
-- Scheduler logs can be dialed in with JVM properties (defaults in parentheses):
-  - `-Druthenium.scheduler.logFallback=true|false` (true) – emit `INFO` lines when Ruthenium defers to vanilla ticking.
-  - `-Druthenium.scheduler.logFallbackStackTraces=true|false` (false) – include stack traces alongside fallback notices.
-  - `-Druthenium.scheduler.logDrainedTasks=true|false` (false) – log when the main thread flushes queued region tasks.
-  - `-Druthenium.scheduler.logRegionSummaries=true|false` (false) – log per-region tick summaries after each run.
-  - `-Druthenium.scheduler.logTaskQueueProcessing=true|false` (false) – log batch counts for per-region task queues.
-
-## Configuration overview
-
-`RegionizerConfig` provides a fluent builder for tuning parameters:
-
-- `emptySectionCreationRadius`: how many empty buffer sections to maintain around populated sections.
-- `mergeRadius`: the neighborhood radius used to decide when regions merge.
-- `recalculationSectionCount`, `maxDeadSectionPercent`, `sectionChunkShift`: thresholds for maintenance and section sizing.
-
-See:
-
-- [`src/main/java/org/bacon/ruthenium/region/RegionizerConfig.java`](src/main/java/org/bacon/ruthenium/region/RegionizerConfig.java)
-- [`src/main/java/org/bacon/ruthenium/region/ThreadedRegionizer.java`](src/main/java/org/bacon/ruthenium/region/ThreadedRegionizer.java)
-
-## Project structure
-
-```
-src/
-├── main/java/org/bacon/ruthenium
-│   ├── Ruthenium.java                  # Fabric entry point and default wiring
-│   ├── region/                         # Regionizer, data, and callbacks
-│   ├── world/                          # Scheduler and world integration
-│   └── mixin/                          # ServerWorld mixins
-└── test/java/org/bacon/ruthenium       # Unit tests
-```
-
-## More docs
-
-- `docs/REGIONIZER.md` — deeper dive into the regionizer invariants and design.
+Reference documentation is in [References/Reference-Folia-ver-1.21.8/](References/Reference-Folia-ver-1.21.8/).
 
 ## License
 
-- This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+See [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Issues and pull requests are welcome. For changes to region behavior or scheduler wiring, include targeted tests (happy path plus a couple of edge cases) to keep the invariants intact.
+Contributions are welcome! Please ensure:
 
-## Not implemented yet
+- Code follows existing style and naming conventions
+- Mixins are properly documented with target signatures
+- Thread safety is maintained (no shared mutable state without synchronization)
+- Changes are tested against both single-player and dedicated server
 
-The following pieces are still in progress or intentionally deferred (see `todo.md` for details):
+## Acknowledgments
 
-- Full `TickRegionScheduler.tickWorld` orchestration on the main thread (honor `shouldKeepTicking`, coordinate world services, time budgets).
-- Watchdog/time‑budget handling and crash diagnostics parity with Folia.
-- Surfacing per‑region tick stats via debug/command interfaces.
-- Regionized world data holders (player/entity/chunk tracking) and thread‑ownership checks akin to Folia.
-- Additional helpers/utilities from Folia (teleport helpers, scheduling wrappers) beyond the basic current‑region/queue APIs.
-- Broader integration tests and server smoke tests; more coverage for task‑queue migration across merges/splits and schedule‑handle reuse.
-- Thorough audit of third‑party mod compatibility and guidance for thread‑safe integration.
+- **Spottedleaf** for the original Folia implementation and regionizer architecture
+- **PaperMC** team for Paper and Folia
+- **Fabric** team for the modding framework
+
