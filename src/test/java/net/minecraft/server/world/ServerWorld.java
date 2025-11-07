@@ -14,7 +14,7 @@ import org.bacon.ruthenium.world.RegionizedWorldData;
  * Minimal ServerWorld stub for unit testing. Only the pieces referenced by TickRegionScheduler
  * fallback logic are implemented.
  */
-public class ServerWorld implements RegionizedServerWorld {
+public final class ServerWorld implements RegionizedServerWorld {
 
     private final RegistryKey<World> registryKey;
     private final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer;
