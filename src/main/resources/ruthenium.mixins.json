@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "refmap": "ruthenium-refmap.json",
   "mixins": [
+    "MinecraftServerMixin",
     "ServerWorldMixin",
     "accessor.ServerWorldAccessor",
     "accessor.ServerChunkManagerAccessor",

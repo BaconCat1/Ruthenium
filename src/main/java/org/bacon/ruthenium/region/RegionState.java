@@ -1,7 +1,7 @@
 package org.bacon.ruthenium.region;
 
 /**
- * Represents the lifecycle of a {@link ThreadedRegion}.
+ * Represents the lifecycle of a {@link ThreadedRegionizer.ThreadedRegion}.
  * <p>
  * Regions flow through the states as follows:
  * <ul>

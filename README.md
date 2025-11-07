@@ -71,7 +71,9 @@ The main thread orchestrates the scheduler and pumps global world services, but 
 ### In Progress 🔄
 
 **Scheduler Lifecycle:**
-- 🔄 Fix vanilla tick flow integration (scheduler return values respected)
+- ✅ Vanilla tick flow integration (scheduler return values respected)
+- ✅ Scheduler lifecycle hooks (bootstrap/shutdown integration)
+- ✅ Per-dimension iteration validates scheduler state before ticking
 - 🔄 Complete `RegionShutdownThread` with graceful save sequence
 - 🔄 Scheduler failure detection and recovery
 

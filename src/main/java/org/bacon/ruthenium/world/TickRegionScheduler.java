@@ -8,6 +8,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import net.minecraft.server.MinecraftServer;
@@ -52,6 +53,7 @@ public final class TickRegionScheduler {
     private final SchedulerThreadPool scheduler;
     private final AtomicBoolean halted = new AtomicBoolean();
     private final RegionWatchdog watchdog;
+    private final AtomicReference<MinecraftServer> serverRef = new AtomicReference<>();
 
     private final ThreadLocal<ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData>> currentRegion = new ThreadLocal<>();
     private final ThreadLocal<ServerWorld> currentWorld = new ThreadLocal<>();
@@ -96,6 +98,10 @@ public final class TickRegionScheduler {
 
     public static TickRegionScheduler getInstance() {
         return INSTANCE;
+    }
+
+    public boolean isHalted() {
+        return this.halted.get();
     }
 
     public static ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> getCurrentRegion() {
@@ -248,6 +254,42 @@ public final class TickRegionScheduler {
         }
         this.watchdog.shutdown();
         this.scheduler.halt(true, TimeUnit.SECONDS.toNanos(5L));
+    }
+
+    public void registerServer(final MinecraftServer server) {
+        Objects.requireNonNull(server, "server");
+        final MinecraftServer previous = this.serverRef.getAndSet(server);
+        if (previous != server) {
+            LOGGER.info("Region scheduler attached to server {}", describeServer(server));
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Region scheduler attached to server {}", describeServer(server));
+        }
+    }
+
+    public void unregisterServer(final MinecraftServer server) {
+        Objects.requireNonNull(server, "server");
+        if (this.serverRef.compareAndSet(server, null)) {
+            LOGGER.info("Region scheduler detached from server {}", describeServer(server));
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Region scheduler detached from server {}", describeServer(server));
+        }
+    }
+
+    public boolean hasActiveRegions(final ServerWorld world) {
+        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
+        final boolean[] active = new boolean[1];
+        regionizer.computeForAllRegions(region -> {
+            if (!region.getData().getChunks().isEmpty()) {
+                active[0] = true;
+            }
+        });
+        return active[0];
+    }
+
+    public void logSchedulerConflict(final ServerWorld world, final String message) {
+        final String worldId = describeWorld(world);
+        LOGGER.warn("{} (world={})", message, worldId);
+        RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message + " (world=" + worldId + ")");
     }
 
     void enterRegionContext(final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
@@ -542,6 +584,18 @@ public final class TickRegionScheduler {
         final String worldId = String.valueOf(handle.getWorld().getRegistryKey().getValue());
         final String centerStr = center == null ? "unknown" : center.x + "," + center.z;
         return "region=" + region.id + "@" + centerStr + " world=" + worldId;
+    }
+
+    private static String describeWorld(final ServerWorld world) {
+        return String.valueOf(world.getRegistryKey().getValue());
+    }
+
+    private static String describeServer(final MinecraftServer server) {
+        final String motd = server.getServerMotd();
+        if (motd == null || motd.isBlank()) {
+            return server.toString();
+        }
+        return motd;
     }
 
     @SuppressWarnings("deprecation") // required while concurrentutil replaces SchedulableTick

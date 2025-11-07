@@ -73,13 +73,36 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
-        RegionDebug.onWorldTick((ServerWorld)(Object)this);
-        final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
-        if (replaced) {
-            this.ruthenium$resetVanillaTickGuards();
+        final ServerWorld world = (ServerWorld)(Object)this;
+        final TickRegionScheduler scheduler = TickRegionScheduler.getInstance();
+        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
+
+        if (worldData.isHandlingTick()) {
+            this.ruthenium$skipVanillaChunkTick = true;
+            scheduler.logSchedulerConflict(world,
+                "Skipping redundant vanilla world tick while scheduler is still handling the dimension");
             ci.cancel();
-        } else {
+            return;
+        }
+
+        RegionDebug.onWorldTick(world);
+        this.ruthenium$skipVanillaChunkTick = true;
+        final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
+        if (replaced) {
+            ci.cancel();
+            return;
+        }
+
+        if (scheduler.isHalted()) {
             this.ruthenium$skipVanillaChunkTick = false;
+            return;
+        }
+
+        final boolean hasActiveRegions = scheduler.hasActiveRegions(world);
+        this.ruthenium$skipVanillaChunkTick = hasActiveRegions;
+        if (hasActiveRegions) {
+            scheduler.logSchedulerConflict(world,
+                "Preventing vanilla chunk tick because scheduler-managed regions remain active");
         }
     }
 
