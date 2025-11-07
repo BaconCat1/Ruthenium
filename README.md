@@ -71,7 +71,7 @@ The main thread orchestrates the scheduler and pumps global world services, but 
 ### In Progress 🔄
 
 **Scheduler Lifecycle:**
-- 🔄 Fix vanilla tick flow integration (respect scheduler return values)
+- 🔄 Fix vanilla tick flow integration (scheduler return values respected)
 - 🔄 Complete `RegionShutdownThread` with graceful save sequence
 - 🔄 Scheduler failure detection and recovery
 

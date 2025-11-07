@@ -62,20 +62,30 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         return this.ruthenium$worldRegionData;
     }
 
-    @Inject(method = "tick", at = @At("HEAD"))
-    private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
-        RegionDebug.onWorldTick((ServerWorld)(Object)this);
-        final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
-        this.ruthenium$skipVanillaChunkTick = replaced;
-    }
-
-    @Inject(method = "tick", at = @At("TAIL"))
-    private void ruthenium$finishRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+    @Unique
+    private void ruthenium$resetVanillaTickGuards() {
         this.ruthenium$skipVanillaChunkTick = false;
         final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
         if (worldData.isHandlingTick()) {
             worldData.setHandlingTick(false);
         }
+    }
+
+    @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        RegionDebug.onWorldTick((ServerWorld)(Object)this);
+        final boolean replaced = TickRegionScheduler.getInstance().tickWorld((ServerWorld)(Object)this, shouldKeepTicking);
+        if (replaced) {
+            this.ruthenium$resetVanillaTickGuards();
+            ci.cancel();
+        } else {
+            this.ruthenium$skipVanillaChunkTick = false;
+        }
+    }
+
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void ruthenium$finishRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        this.ruthenium$resetVanillaTickGuards();
     }
 
     @Inject(method = "getRaidAt", at = @At("HEAD"), cancellable = true)

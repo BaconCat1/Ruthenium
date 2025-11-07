@@ -29,7 +29,7 @@
 
 ### 1. Complete Scheduler Lifecycle Integration
 - [ ] **Reconcile scheduler with vanilla tick flow**
-  - [ ] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
+  - [x] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
   - [ ] Ensure vanilla chunk ticking only runs when scheduler returns false (no regions active)
   - [ ] Add scheduler state check to prevent double-ticking when regions are active
   - [ ] Audit `MinecraftServerMixin` for proper scheduler bootstrap/shutdown hooks

@@ -664,9 +664,7 @@ public final class TickRegionScheduler {
 
             this.lastTickStart = tickStart;
             final long duration = Math.max(0L, tickEnd - tickStart);
-            if (duration > 0L) {
-                this.tickStats.recordTickDuration(duration);
-            }
+            this.tickStats.recordTickDuration(duration);
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick end region {}: {} ms", this.region.id, (duration / 1_000_000.0D));
             this.tickSchedule.advanceBy(tickCount, TICK_INTERVAL_NANOS);
