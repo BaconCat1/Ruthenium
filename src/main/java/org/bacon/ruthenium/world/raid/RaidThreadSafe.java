@@ -8,5 +8,11 @@ import net.minecraft.server.world.ServerWorld;
  */
 public interface RaidThreadSafe {
 
+    /**
+     * Verifies that the raid is owned by the thread currently executing the supplied world.
+     *
+     * @param world world to validate against
+     * @return {@code true} when the raid should run on the provided world's region thread
+     */
     boolean ruthenium$ownsRaid(ServerWorld world);
 }

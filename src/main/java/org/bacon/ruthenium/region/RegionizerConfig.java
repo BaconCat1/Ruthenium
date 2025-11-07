@@ -20,22 +20,47 @@ public final class RegionizerConfig {
         this.sectionChunkShift = builder.sectionChunkShift;
     }
 
+    /**
+     * Returns how many sections the regionizer should process before recalculating ownership.
+     *
+     * @return section recalculation batch size
+     */
     public int getRecalculationSectionCount() {
         return this.recalculationSectionCount;
     }
 
+    /**
+     * Returns the maximum percentage of dead sections tolerated before triggering compaction.
+     *
+     * @return allowed dead section ratio
+     */
     public double getMaxDeadSectionPercent() {
         return this.maxDeadSectionPercent;
     }
 
+    /**
+     * Returns the radius used when creating empty sections around new region centers.
+     *
+     * @return section creation radius in sections
+     */
     public int getEmptySectionCreationRadius() {
         return this.emptySectionCreationRadius;
     }
 
+    /**
+     * Returns the radius used when searching for candidate regions to merge.
+     *
+     * @return merge radius in sections
+     */
     public int getMergeRadius() {
         return this.mergeRadius;
     }
 
+    /**
+     * Returns the log2 chunk shift applied when mapping chunks to sections.
+     *
+     * @return chunk shift magnitude
+     */
     public int getSectionChunkShift() {
         return this.sectionChunkShift;
     }
@@ -63,6 +88,12 @@ public final class RegionizerConfig {
         private Builder() {
         }
 
+        /**
+         * Sets the number of sections processed between recalculations.
+         *
+         * @param value new section count
+         * @return {@code this} for chaining
+         */
         public Builder recalculationSectionCount(final int value) {
             if (value < 1) {
                 throw new IllegalArgumentException("Recalculation section count must be positive");
@@ -71,6 +102,12 @@ public final class RegionizerConfig {
             return this;
         }
 
+        /**
+         * Sets the threshold of dead sections tolerated before cleanup.
+         *
+         * @param value dead section ratio in the range [0, 1]
+         * @return {@code this} for chaining
+         */
         public Builder maxDeadSectionPercent(final double value) {
             if (value < 0.0D || value > 1.0D) {
                 throw new IllegalArgumentException("Dead section percent must be in [0, 1]");
@@ -79,6 +116,12 @@ public final class RegionizerConfig {
             return this;
         }
 
+        /**
+         * Sets the radius used when provisioning new sections in empty areas.
+         *
+         * @param value section radius
+         * @return {@code this} for chaining
+         */
         public Builder emptySectionCreationRadius(final int value) {
             if (value < 0) {
                 throw new IllegalArgumentException("Empty section creation radius must be non-negative");
@@ -87,6 +130,12 @@ public final class RegionizerConfig {
             return this;
         }
 
+        /**
+         * Sets the radius used when locating regions to merge.
+         *
+         * @param value merge radius
+         * @return {@code this} for chaining
+         */
         public Builder mergeRadius(final int value) {
             if (value < 0) {
                 throw new IllegalArgumentException("Merge radius must be non-negative");
@@ -95,6 +144,12 @@ public final class RegionizerConfig {
             return this;
         }
 
+        /**
+         * Sets how many chunk bits to shift when mapping chunk coordinates to section coordinates.
+         *
+         * @param value chunk shift magnitude
+         * @return {@code this} for chaining
+         */
         public Builder sectionChunkShift(final int value) {
             if (value < 0 || value > 10) {
                 throw new IllegalArgumentException("Section chunk shift must be between 0 and 10");
@@ -103,6 +158,11 @@ public final class RegionizerConfig {
             return this;
         }
 
+        /**
+         * Builds an immutable configuration instance.
+         *
+         * @return new configuration instance
+         */
         public RegionizerConfig build() {
             return new RegionizerConfig(this);
         }

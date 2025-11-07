@@ -28,6 +28,11 @@ public final class RegionCommand {
 
     private RegionCommand() {}
 
+    /**
+     * Registers the {@code /region} command and its sub-commands with the Brigadier dispatcher.
+     *
+     * @param dispatcher command dispatcher supplied during server command registration
+     */
     public static void register(final CommandDispatcher<ServerCommandSource> dispatcher) {
         final LiteralArgumentBuilder<ServerCommandSource> root = literal("region")
             .requires(src -> src.hasPermissionLevel(2))
@@ -154,6 +159,12 @@ public final class RegionCommand {
         dispatcher.register(root);
     }
 
+    /**
+     * Formats an MSPT or TPS value using a precision appropriate for its magnitude.
+     *
+     * @param value numeric value to format
+     * @return string suitable for chat output
+     */
     static String formatDouble(final double value) {
         if (!Double.isFinite(value)) {
             return Double.toString(value);

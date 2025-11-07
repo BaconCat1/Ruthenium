@@ -21,9 +21,15 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class RegionDebug {
 
+    /**
+     * Logging categories exposed to command toggles.
+     */
     public enum LogCategory {
+        /** Lifecycle events such as region creation and destruction. */
         LIFECYCLE,
+        /** Player movement events between regions. */
         MOVEMENT,
+        /** Scheduler activity and task dispatch information. */
         SCHEDULER
     }
 
@@ -34,12 +40,23 @@ public final class RegionDebug {
 
     private RegionDebug() {}
 
+    /**
+     * Determines whether logging is currently enabled for the supplied category.
+     *
+     * @param category category to check
+     * @return {@code true} when logging is enabled
+     */
     public static boolean isEnabled(final LogCategory category) {
         synchronized (ENABLED) {
             return ENABLED.contains(category);
         }
     }
 
+    /**
+     * Enables the requested logging category.
+     *
+     * @param category category to enable
+     */
     public static void enable(final LogCategory category) {
         synchronized (ENABLED) {
             ENABLED.add(category);
@@ -47,6 +64,11 @@ public final class RegionDebug {
         Ruthenium.getLogger().info("Region debug category {} enabled", category);
     }
 
+    /**
+     * Disables the requested logging category and clears associated caches when required.
+     *
+     * @param category category to disable
+     */
     public static void disable(final LogCategory category) {
         synchronized (ENABLED) {
             ENABLED.remove(category);
@@ -57,6 +79,12 @@ public final class RegionDebug {
         Ruthenium.getLogger().info("Region debug category {} disabled", category);
     }
 
+    /**
+     * Toggles the supplied category and reports the new state.
+     *
+     * @param category category to toggle
+     * @return {@code true} when the category becomes enabled
+     */
     public static boolean toggle(final LogCategory category) {
         final boolean enabled;
         synchronized (ENABLED) {
@@ -75,10 +103,20 @@ public final class RegionDebug {
         return enabled;
     }
 
+    /**
+     * Enables or disables all categories and logs the change.
+     *
+     * @param on {@code true} to enable every category
+     */
     public static void setAll(final boolean on) {
         setAllInternal(on, true);
     }
 
+    /**
+     * Enables or disables all categories without emitting a log message.
+     *
+     * @param on {@code true} to enable every category
+     */
     public static void setAllQuietly(final boolean on) {
         setAllInternal(on, false);
     }
@@ -98,6 +136,11 @@ public final class RegionDebug {
         }
     }
 
+    /**
+     * Summarises the current category enablement state for command feedback.
+     *
+     * @return textual status line
+     */
     public static String statusLine() {
         final EnumSet<LogCategory> snapshot;
         synchronized (ENABLED) {
@@ -108,12 +151,24 @@ public final class RegionDebug {
                ", Scheduler=" + (snapshot.contains(LogCategory.SCHEDULER) ? "on" : "off");
     }
 
+    /**
+     * Returns whether at least one logging category is currently active.
+     *
+     * @return {@code true} when at least one logging category is enabled
+     */
     public static boolean anyEnabled() {
         synchronized (ENABLED) {
             return !ENABLED.isEmpty();
         }
     }
 
+    /**
+     * Emits a formatted log line when the specified category is currently enabled.
+     *
+     * @param category category associated with the message
+     * @param message  log message template
+     * @param args     template arguments
+     */
     public static void log(final LogCategory category, final String message, final Object... args) {
         if (!isEnabled(category)) {
             return;
@@ -124,6 +179,8 @@ public final class RegionDebug {
 
     /**
      * Called once per world tick to report player movement between regions when enabled.
+     *
+     * @param world world being ticked
      */
     public static void onWorldTick(final ServerWorld world) {
         if (!isEnabled(LogCategory.MOVEMENT)) {

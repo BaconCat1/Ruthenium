@@ -21,6 +21,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(CheckedRandom.class)
 public abstract class CheckedRandomMixin {
 
+    /**
+     * Mixin initialization hook required by the Mixin framework.
+     */
+    protected CheckedRandomMixin() {
+    }
+
     @Shadow @Final private static long MULTIPLIER;
     @Shadow @Final private static long INCREMENT;
     @Shadow @Final private static long SEED_MASK;

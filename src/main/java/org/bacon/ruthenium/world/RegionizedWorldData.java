@@ -38,23 +38,48 @@ public final class RegionizedWorldData {
     private int wakeupInactiveRemainingMonsters;
     private int wakeupInactiveRemainingVillagers;
 
+    /**
+     * Creates a new world data wrapper for the supplied world.
+     *
+     * @param world backing server world
+     */
     public RegionizedWorldData(final ServerWorld world) {
         this.world = Objects.requireNonNull(world, "world");
         this.redstoneGameTime = world.getTime();
     }
 
+    /**
+     * Returns the world associated with this data object.
+     *
+     * @return backing server world
+     */
     public ServerWorld getWorld() {
         return this.world;
     }
 
+    /**
+     * Indicates whether the world is currently in the middle of a regionized tick.
+     *
+     * @return {@code true} when a tick is being processed
+     */
     public boolean isHandlingTick() {
         return this.handlingTick;
     }
 
+    /**
+     * Marks the world as actively handling a tick.
+     *
+     * @param handlingTick {@code true} when a tick is underway
+     */
     public void setHandlingTick(final boolean handlingTick) {
         this.handlingTick = handlingTick;
     }
 
+    /**
+     * Returns the last recorded lag compensation timestamp.
+     *
+     * @return nano time captured just before the latest tick
+     */
     public long getLagCompensationTick() {
         return this.lagCompensationTick;
     }
@@ -69,14 +94,22 @@ public final class RegionizedWorldData {
     }
 
     /**
-     * Ticks pending world services that are still expected to run on the main orchestrator thread.
-     * For now this only advances player network handlers so disconnects and heartbeat packets are
-     * not starved while the per-region ticks execute on background threads.
+     * Returns the redstone game time maintained for region ticks.
+     *
+     * @return cached redstone time
      */
     public long getRedstoneGameTime() {
         return this.redstoneGameTime;
     }
 
+    /**
+     * Resets per-tick mob wake-up budgets based on the supplied allowances.
+     *
+     * @param animals   budget for animals
+     * @param monsters  budget for monsters
+     * @param flying    budget for mobs that fly
+     * @param villagers budget for villagers
+     */
     public void resetMobWakeupBudgets(final int animals, final int monsters, final int flying, final int villagers) {
         this.wakeupInactiveRemainingAnimals = Math.max(0, animals);
         this.wakeupInactiveRemainingMonsters = Math.max(0, monsters);
@@ -84,6 +117,11 @@ public final class RegionizedWorldData {
         this.wakeupInactiveRemainingVillagers = Math.max(0, villagers);
     }
 
+    /**
+     * Attempts to consume the animal wake-up budget.
+     *
+     * @return {@code true} when the budget allowed the request
+     */
     public boolean tryConsumeAnimalWakeBudget() {
         if (this.wakeupInactiveRemainingAnimals <= 0) {
             return false;
@@ -92,6 +130,11 @@ public final class RegionizedWorldData {
         return true;
     }
 
+    /**
+     * Attempts to consume the monster wake-up budget.
+     *
+     * @return {@code true} when the budget allowed the request
+     */
     public boolean tryConsumeMonsterWakeBudget() {
         if (this.wakeupInactiveRemainingMonsters <= 0) {
             return false;
@@ -100,6 +143,11 @@ public final class RegionizedWorldData {
         return true;
     }
 
+    /**
+     * Attempts to consume the flying mob wake-up budget.
+     *
+     * @return {@code true} when the budget allowed the request
+     */
     public boolean tryConsumeFlyingWakeBudget() {
         if (this.wakeupInactiveRemainingFlying <= 0) {
             return false;
@@ -108,6 +156,11 @@ public final class RegionizedWorldData {
         return true;
     }
 
+    /**
+     * Attempts to consume the villager wake-up budget.
+     *
+     * @return {@code true} when the budget allowed the request
+     */
     public boolean tryConsumeVillagerWakeBudget() {
         if (this.wakeupInactiveRemainingVillagers <= 0) {
             return false;
@@ -116,32 +169,72 @@ public final class RegionizedWorldData {
         return true;
     }
 
+    /**
+     * Marks a chunk as ticking within the current region state.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void addChunk(final int chunkX, final int chunkZ) {
         this.tickingChunks.add(CoordinateUtil.getChunkKey(chunkX, chunkZ));
     }
 
+    /**
+     * Removes a chunk from both ticking sets.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void removeChunk(final int chunkX, final int chunkZ) {
         final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
         this.tickingChunks.remove(key);
         this.entityTickingChunks.remove(key);
     }
 
+    /**
+     * Marks a chunk as entity-ticking.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void markEntityTickingChunk(final int chunkX, final int chunkZ) {
         this.entityTickingChunks.add(CoordinateUtil.getChunkKey(chunkX, chunkZ));
     }
 
+    /**
+     * Removes a chunk from the entity-ticking set.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void unmarkEntityTickingChunk(final int chunkX, final int chunkZ) {
         this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(chunkX, chunkZ));
     }
 
+    /**
+     * Produces a snapshot of the currently ticking chunk keys.
+     *
+     * @return array containing ticking chunk keys
+     */
     public long[] snapshotTickingChunks() {
         return this.tickingChunks.toLongArray();
     }
 
+    /**
+     * Produces a snapshot of chunks that are ticking entities.
+     *
+     * @return array containing entity ticking chunk keys
+     */
     public long[] snapshotEntityTickingChunks() {
         return this.entityTickingChunks.toLongArray();
     }
 
+    /**
+     * Ticks pending world services that must continue to execute on the orchestrator thread to
+     * keep the world responsive.
+     *
+     * @param shouldKeepTicking supplier that may abort expensive work when headroom is exhausted
+     */
     public void tickGlobalServices(final BooleanSupplier shouldKeepTicking) {
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
@@ -176,12 +269,20 @@ public final class RegionizedWorldData {
         this.resetMobWakeupBudgets(4, 8, 2, 4);
     }
 
+    /**
+     * Prepares the world for a new tick, updating timing data and running global services.
+     *
+     * @param shouldKeepTicking supplier used to abort work when deadlines are exceeded
+     */
     public void beginTick(final BooleanSupplier shouldKeepTicking) {
         this.setHandlingTick(true);
         this.updateTickData();
         this.tickGlobalServices(shouldKeepTicking);
     }
 
+    /**
+     * Marks the completion of a world tick.
+     */
     public void finishTick() {
         this.setHandlingTick(false);
     }
@@ -199,6 +300,11 @@ public final class RegionizedWorldData {
         }
     }
 
+    /**
+     * Refreshes ticking chunk snapshots so that region threads operate on up-to-date data.
+     *
+     * @param shouldKeepTicking supplier used to abort work when deadlines are exceeded
+     */
     public void populateChunkState(final BooleanSupplier shouldKeepTicking) {
         if (!shouldKeepTicking.getAsBoolean()) {
             return;
@@ -273,6 +379,11 @@ public final class RegionizedWorldData {
         ((ServerWorldAccessor)this.world).ruthenium$invokeTickTime();
     }
 
+    /**
+     * Removes chunks from the entity ticking set once the server reports that their tasks drained.
+     *
+     * @param chunks iterable containing drained chunks
+     */
     public void notifyChunkListDrained(final Iterable<ChunkPos> chunks) {
         for (final ChunkPos pos : chunks) {
             this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));

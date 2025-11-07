@@ -32,6 +32,9 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
     private final LongSet chunks = new LongOpenHashSet();
     private final RegionTaskQueue taskQueue = new RegionTaskQueue();
 
+    /**
+     * Creates a new region tick data instance using the global scheduler.
+     */
     public RegionTickData() {
         this(TickRegionScheduler.getInstance());
     }
@@ -41,14 +44,18 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
     }
 
     /**
-     * @return the current tick counter for the region.
+     * Returns the current tick counter recorded for the region.
+     *
+     * @return the current tick counter for the region
      */
     public long getCurrentTick() {
         return this.currentTick;
     }
 
     /**
-     * @return the redstone tick counter for the region.
+     * Returns the redstone tick counter maintained for the region.
+     *
+     * @return the redstone tick counter for the region
      */
     public long getRedstoneTick() {
         return this.redstoneTick;
@@ -105,6 +112,12 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         return copy;
     }
 
+    /**
+     * Attaches this data object to the supplied region and scheduler.
+     *
+     * @param region    region receiving the data
+     * @param scheduler scheduler that owns the region
+     */
     public void attachRegion(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region,
                               final TickRegionScheduler scheduler) {
         Objects.requireNonNull(region, "region");
@@ -116,6 +129,12 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         this.scheduleHandle = scheduler.createHandle(this, region, this.scheduleHandle);
     }
 
+    /**
+     * Returns the scheduling handle associated with this region.
+     *
+     * @return active schedule handle
+     * @throws IllegalStateException when the handle has not been initialised
+     */
     public TickRegionScheduler.RegionScheduleHandle getScheduleHandle() {
         if (this.scheduleHandle == null) {
             throw new IllegalStateException("Region schedule handle has not been initialised");
@@ -123,6 +142,9 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         return this.scheduleHandle;
     }
 
+    /**
+     * Rebuilds the schedule handle when the region configuration changes.
+     */
     public void refreshScheduleHandle() {
         if (this.region == null) {
             return;
@@ -130,6 +152,12 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         this.scheduleHandle = this.scheduler.createHandle(this, this.region, this.scheduleHandle);
     }
 
+    /**
+     * Registers a chunk with the region and corresponding world data.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void addChunk(final int chunkX, final int chunkZ) {
         this.chunks.add(encodeChunk(chunkX, chunkZ));
         final RegionizedWorldData worldData = this.resolveWorldData();
@@ -138,6 +166,12 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         }
     }
 
+    /**
+     * Removes a chunk from the region and synchronises the world data accordingly.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     */
     public void removeChunk(final int chunkX, final int chunkZ) {
         this.chunks.remove(encodeChunk(chunkX, chunkZ));
         final RegionizedWorldData worldData = this.resolveWorldData();
@@ -146,16 +180,30 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         }
     }
 
+    /**
+     * Returns the set of chunk keys owned by the region.
+     *
+     * @return chunk key set
+     */
     public LongSet getChunks() {
         return this.chunks;
     }
 
+    /**
+     * Determines whether the region owns the supplied chunk coordinates.
+     *
+     * @param chunkX chunk X coordinate
+     * @param chunkZ chunk Z coordinate
+     * @return {@code true} when the chunk is present
+     */
     public boolean containsChunk(final int chunkX, final int chunkZ) {
         return this.chunks.contains(encodeChunk(chunkX, chunkZ));
     }
 
     /**
-     * @return queue used to coordinate tasks scheduled against this region.
+     * Returns the queue used to coordinate tasks scheduled against this region.
+     *
+     * @return queue used to coordinate tasks scheduled against this region
      */
     public RegionTaskQueue getTaskQueue() {
         return this.taskQueue;
@@ -173,6 +221,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         return this.scheduleHandle.getTickStats();
     }
 
+    /** {@inheritDoc} */
     @Override
     public void split(final ThreadedRegionizer<RegionTickData, RegionSectionData> regioniser,
                       final Long2ReferenceOpenHashMap<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> into,
@@ -238,6 +287,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         this.chunks.clear();
     }
 
+    /** {@inheritDoc} */
     @Override
     public void mergeInto(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> into) {
         final RegionTickData targetData = into.getData();
@@ -251,12 +301,27 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         }
     }
 
+    /**
+     * Marker object containing per-section state for the threaded regionizer.
+     */
     public static final class RegionSectionData implements ThreadedRegionizer.ThreadedRegionSectionData {}
 
+    /**
+     * Extracts the chunk X coordinate from a packed chunk key.
+     *
+     * @param chunkKey packed chunk key
+     * @return chunk X coordinate
+     */
     public static int decodeChunkX(final long chunkKey) {
         return (int)(chunkKey & 0xFFFFFFFFL);
     }
 
+    /**
+     * Extracts the chunk Z coordinate from a packed chunk key.
+     *
+     * @param chunkKey packed chunk key
+     * @return chunk Z coordinate
+     */
     public static int decodeChunkZ(final long chunkKey) {
         return (int)((chunkKey >>> 32) & 0xFFFFFFFFL);
     }

@@ -21,9 +21,22 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.Overwrite;
 
+/**
+ * Adds region-ownership guards to raid interactions so raid logic executes on the correct region
+ * thread.
+ */
 @Mixin(Raid.class)
 public abstract class RaidMixin implements RaidThreadSafe {
 
+    /**
+     * Required mixin constructor.
+     */
+    protected RaidMixin() {
+    }
+
+    /**
+     * Provides access to the raid's center position defined by the target class.
+     */
     @Shadow public abstract BlockPos getCenter();
 
     @Overwrite
@@ -42,6 +55,12 @@ public abstract class RaidMixin implements RaidThreadSafe {
         };
     }
 
+    /**
+     * Determines whether the supplied world owns this raid's center chunk.
+     *
+     * @param world world performing the ownership check
+     * @return {@code true} when the region executing in {@code world} should manage this raid
+     */
     @Override
     public boolean ruthenium$ownsRaid(final ServerWorld world) {
         if (world == null) {
@@ -63,12 +82,12 @@ public abstract class RaidMixin implements RaidThreadSafe {
 
     @Redirect(method = "tick", at = @At(value = "INVOKE", target = "Lnet/minecraft/entity/LivingEntity;addStatusEffect(Lnet/minecraft/entity/effect/StatusEffectInstance;)Z"))
     private boolean ruthenium$scheduleHeroEffect(final LivingEntity living, final StatusEffectInstance instance) {
-    final StatusEffectInstance copy = new StatusEffectInstance(instance);
-            if (living instanceof ServerPlayerEntity player) {
+        final StatusEffectInstance copy = new StatusEffectInstance(instance);
+        if (living instanceof ServerPlayerEntity player) {
             RegionThreadUtil.scheduleOnPlayer(player, () -> {
                 living.addStatusEffect(new StatusEffectInstance(copy));
                 player.incrementStat(Stats.RAID_WIN);
-                net.minecraft.advancement.criterion.Criteria.HERO_OF_THE_VILLAGE.trigger(player);
+                Criteria.HERO_OF_THE_VILLAGE.trigger(player);
             });
         } else {
             final ServerWorld world = TickRegionScheduler.getCurrentWorld();

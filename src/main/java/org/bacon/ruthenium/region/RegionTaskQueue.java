@@ -22,6 +22,12 @@ public final class RegionTaskQueue {
     private final Deque<RegionChunkTask> chunkTasks = new LinkedList<>();
 
     /**
+     * Creates an empty queue with no pending region tasks.
+     */
+    public RegionTaskQueue() {
+    }
+
+    /**
      * Queues a runnable that should execute when the owning region next ticks
      * the specified chunk. The runnable will execute at most once.
      *
@@ -49,7 +55,9 @@ public final class RegionTaskQueue {
     }
 
     /**
-     * @return {@code true} when no pending chunk tasks remain.
+     * Determines whether any tasks remain in the queue.
+     *
+     * @return {@code true} when no pending chunk tasks remain
      */
     public boolean isEmpty() {
         synchronized (this) {
@@ -168,14 +176,29 @@ public final class RegionTaskQueue {
             this.runnable = runnable;
         }
 
+        /**
+         * Returns the chunk X coordinate targeted by this task.
+         *
+         * @return chunk X coordinate
+         */
         public int chunkX() {
             return this.chunkX;
         }
 
+        /**
+         * Returns the chunk Z coordinate targeted by this task.
+         *
+         * @return chunk Z coordinate
+         */
         public int chunkZ() {
             return this.chunkZ;
         }
 
+        /**
+         * Returns the runnable that should execute when the owning region ticks the chunk.
+         *
+         * @return runnable scheduled for execution
+         */
         public Runnable runnable() {
             return this.runnable;
         }

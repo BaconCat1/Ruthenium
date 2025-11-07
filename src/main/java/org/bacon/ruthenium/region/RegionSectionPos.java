@@ -66,10 +66,20 @@ public final class RegionSectionPos {
         return Math.max(Math.abs(this.x - other.x), Math.abs(this.z - other.z));
     }
 
+    /**
+     * Returns the section X coordinate.
+     *
+     * @return section X
+     */
     public int x() {
         return this.x;
     }
 
+    /**
+     * Returns the section Z coordinate.
+     *
+     * @return section Z
+     */
     public int z() {
         return this.z;
     }

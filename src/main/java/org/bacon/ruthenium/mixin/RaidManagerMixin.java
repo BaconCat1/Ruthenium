@@ -31,14 +31,31 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.Overwrite;
 
+/**
+ * Provides region thread aware behaviour for raid management, ensuring that raid state mutation
+ * happens on the owning region thread while preserving vanilla semantics.
+ */
 @Mixin(RaidManager.class)
 public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
+
+    /**
+     * Required mixin constructor.
+     */
+    protected RaidManagerMixin() {
+    }
 
     @Shadow @Final @Mutable private Int2ObjectMap<Raid> raids;
     @Shadow private int nextAvailableId;
     @Shadow private int currentTime;
 
+    /**
+     * Shadowed persistence hook from the vanilla raid manager.
+     */
     @Shadow protected abstract void markDirty();
+
+    /**
+     * Shadowed raid factory, invoked to obtain or create a raid centered on the supplied position.
+     */
     @Shadow protected abstract Raid getOrCreateRaid(ServerWorld world, BlockPos pos);
 
     @Unique
@@ -63,6 +80,10 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         this.ruthenium$nextAvailable.set(Math.max(1, this.nextAvailableId));
     }
 
+    /**
+     * Advances bookkeeping that must remain on the orchestrator thread, mirroring the vanilla raid
+     * manager's periodic {@code tick()} side effects.
+     */
     @Override
     public void ruthenium$globalTick() {
         this.currentTime++;
@@ -71,6 +92,12 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         }
     }
 
+    /**
+     * Locates the raid identifier associated with the provided raid instance.
+     *
+     * @param raid raid whose identifier should be resolved
+     * @return identifier or empty when the raid is not tracked
+     */
     @Overwrite
     public OptionalInt getRaidId(final Raid raid) {
         synchronized (this.raids) {
@@ -85,6 +112,12 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         return OptionalInt.empty();
     }
 
+    /**
+     * Ticks active raids, skipping those owned by other region threads and cleaning up completed
+     * raids in a thread-safe manner.
+     *
+     * @param world world executing the raid update
+     */
     @Overwrite
     public void tick(final ServerWorld world) {
         final boolean disableRaids = world.getGameRules().getBoolean(GameRules.DISABLE_RAIDS);
@@ -108,13 +141,23 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         }
     }
 
+    /**
+     * Starts a raid centered at the supplied position when the current region thread owns all
+     * relevant chunks and players.
+     *
+     * @param player player triggering the raid
+     * @param pos    raid origin position
+     * @return raid instance or {@code null} when the raid could not start
+     */
     @Overwrite
     public Raid startRaid(final ServerPlayerEntity player, final BlockPos pos) {
         if (player.isSpectator()) {
             return null;
         }
-    final ServerWorld world = TickRegionScheduler.getCurrentWorld();
-    if (world == null) return null;
+        final ServerWorld world = TickRegionScheduler.getCurrentWorld();
+        if (world == null) {
+            return null;
+        }
         if (world.getGameRules().getBoolean(GameRules.DISABLE_RAIDS)) {
             return null;
         }
@@ -126,7 +169,9 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
             return null;
         }
 
-    final List<PointOfInterest> pois = world.getPointOfInterestStorage().getInCircle(point -> true, pos, 64, PointOfInterestStorage.OccupationStatus.IS_OCCUPIED).toList();
+        final List<PointOfInterest> pois = world.getPointOfInterestStorage()
+            .getInCircle(point -> true, pos, 64, PointOfInterestStorage.OccupationStatus.IS_OCCUPIED)
+            .toList();
         int total = 0;
         Vec3d accumulated = Vec3d.ZERO;
         for (final PointOfInterest poi : pois) {
@@ -151,6 +196,11 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
 
     // shadow present earlier in the file; do not duplicate
 
+    /**
+     * Provides thread-safe raid identifiers by backing the vanilla counter with an atomic integer.
+     *
+     * @return next raid identifier
+     */
     @Overwrite
     protected int nextId() {
         final int id = this.ruthenium$nextAvailable.incrementAndGet();
@@ -158,12 +208,27 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         return id;
     }
 
+    /**
+     * Retrieves the closest raid to the supplied position, respecting region ownership checks.
+     *
+     * @param pos            search origin
+     * @param searchDistance maximum squared distance to consider
+     * @return raid instance or {@code null} when none are close enough
+     */
     @Overwrite
     public Raid getRaidAt(final BlockPos pos, final int searchDistance) {
         final ServerWorld current = TickRegionScheduler.getCurrentWorld();
         return this.ruthenium$getRaidFor(current, pos, searchDistance);
     }
 
+    /**
+     * Finds a raid near the provided position that is owned by the specified world, if any.
+     *
+     * @param world          world that must own the raid
+     * @param pos            position near which to search
+     * @param searchDistance maximum squared distance to consider
+     * @return matching raid or {@code null} when none match the criteria
+     */
     @Override
     public Raid ruthenium$getRaidFor(final ServerWorld world, final BlockPos pos, final int searchDistance) {
         double bestDistance = searchDistance;
