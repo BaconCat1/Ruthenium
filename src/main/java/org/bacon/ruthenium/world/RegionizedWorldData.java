@@ -28,6 +28,7 @@ import org.bacon.ruthenium.util.CoordinateUtil;
 public final class RegionizedWorldData {
 
     private final ServerWorld world;
+    private final Object chunkLock = new Object();
     private final LongSet tickingChunks = new LongOpenHashSet();
     private final LongSet entityTickingChunks = new LongOpenHashSet();
     private volatile boolean handlingTick;
@@ -176,7 +177,10 @@ public final class RegionizedWorldData {
      * @param chunkZ chunk Z coordinate
      */
     public void addChunk(final int chunkX, final int chunkZ) {
-        this.tickingChunks.add(CoordinateUtil.getChunkKey(chunkX, chunkZ));
+        final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        synchronized (this.chunkLock) {
+            this.tickingChunks.add(key);
+        }
     }
 
     /**
@@ -187,8 +191,10 @@ public final class RegionizedWorldData {
      */
     public void removeChunk(final int chunkX, final int chunkZ) {
         final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
-        this.tickingChunks.remove(key);
-        this.entityTickingChunks.remove(key);
+        synchronized (this.chunkLock) {
+            this.tickingChunks.remove(key);
+            this.entityTickingChunks.remove(key);
+        }
     }
 
     /**
@@ -198,7 +204,10 @@ public final class RegionizedWorldData {
      * @param chunkZ chunk Z coordinate
      */
     public void markEntityTickingChunk(final int chunkX, final int chunkZ) {
-        this.entityTickingChunks.add(CoordinateUtil.getChunkKey(chunkX, chunkZ));
+        final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        synchronized (this.chunkLock) {
+            this.entityTickingChunks.add(key);
+        }
     }
 
     /**
@@ -208,7 +217,10 @@ public final class RegionizedWorldData {
      * @param chunkZ chunk Z coordinate
      */
     public void unmarkEntityTickingChunk(final int chunkX, final int chunkZ) {
-        this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(chunkX, chunkZ));
+        final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        synchronized (this.chunkLock) {
+            this.entityTickingChunks.remove(key);
+        }
     }
 
     /**
@@ -217,7 +229,9 @@ public final class RegionizedWorldData {
      * @return array containing ticking chunk keys
      */
     public long[] snapshotTickingChunks() {
-        return this.tickingChunks.toLongArray();
+        synchronized (this.chunkLock) {
+            return this.tickingChunks.toLongArray();
+        }
     }
 
     /**
@@ -226,7 +240,9 @@ public final class RegionizedWorldData {
      * @return array containing entity ticking chunk keys
      */
     public long[] snapshotEntityTickingChunks() {
-        return this.entityTickingChunks.toLongArray();
+        synchronized (this.chunkLock) {
+            return this.entityTickingChunks.toLongArray();
+        }
     }
 
     /**
@@ -324,21 +340,23 @@ public final class RegionizedWorldData {
             newTicking.add(CoordinateUtil.getChunkKey(pos.x, pos.z));
         });
 
-        this.tickingChunks.clear();
-        final LongIterator tickingIterator = newTicking.iterator();
-        while (tickingIterator.hasNext()) {
-            this.tickingChunks.add(tickingIterator.nextLong());
-        }
-
         final ChunkLevelManager levelManager = loadingManager.getLevelManager();
-        this.entityTickingChunks.clear();
-        final LongIterator entityIterator = newTicking.iterator();
-        while (entityIterator.hasNext()) {
-            final long chunkKey = entityIterator.nextLong();
-            final int chunkX = CoordinateUtil.getChunkX(chunkKey);
-            final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
-            if (levelManager.shouldTickEntities(ChunkPos.toLong(chunkX, chunkZ))) {
-                this.entityTickingChunks.add(chunkKey);
+        synchronized (this.chunkLock) {
+            this.tickingChunks.clear();
+            final LongIterator tickingIterator = newTicking.iterator();
+            while (tickingIterator.hasNext()) {
+                this.tickingChunks.add(tickingIterator.nextLong());
+            }
+
+            this.entityTickingChunks.clear();
+            final LongIterator entityIterator = newTicking.iterator();
+            while (entityIterator.hasNext()) {
+                final long chunkKey = entityIterator.nextLong();
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                if (levelManager.shouldTickEntities(ChunkPos.toLong(chunkX, chunkZ))) {
+                    this.entityTickingChunks.add(chunkKey);
+                }
             }
         }
 
@@ -385,8 +403,10 @@ public final class RegionizedWorldData {
      * @param chunks iterable containing drained chunks
      */
     public void notifyChunkListDrained(final Iterable<ChunkPos> chunks) {
-        for (final ChunkPos pos : chunks) {
-            this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));
+        synchronized (this.chunkLock) {
+            for (final ChunkPos pos : chunks) {
+                this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));
+            }
         }
     }
 }
