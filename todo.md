@@ -28,7 +28,7 @@
   - [x] Add debug commands (`/region info`, `/region stats`)
 
 ### 1. Complete Scheduler Lifecycle Integration
-- [ ] **Reconcile scheduler with vanilla tick flow**
+- [x] **Reconcile scheduler with vanilla tick flow**
   - [x] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
   - [x] Ensure vanilla chunk ticking only runs when scheduler returns false (no regions active)
   - [x] Add scheduler state check to prevent double-ticking when regions are active

@@ -125,16 +125,17 @@ public final class TickRegionScheduler {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
 
+        final long invocationStart = System.nanoTime();
         if (this.halted.get()) {
-            this.logFallback("Scheduler halted; falling back to vanilla world tick for {}",
-                world.getRegistryKey().getValue());
-            return false;
+            return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_BEFORE_START,
+                this.buildDiagnostics(world, "pre-check", false, false,
+                    System.nanoTime() - invocationStart));
         }
 
         if (!shouldKeepTicking.getAsBoolean()) {
-            this.logFallback("Server requested stop-ticking; allowing vanilla tick for {}",
-                world.getRegistryKey().getValue());
-            return false;
+            return this.logFallback(world, FallbackReason.SERVER_BUDGET_EXHAUSTED_BEFORE_START,
+                this.buildDiagnostics(world, "pre-check", false, false,
+                    System.nanoTime() - invocationStart));
         }
 
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
@@ -144,20 +145,23 @@ public final class TickRegionScheduler {
         worldData.beginTick(shouldKeepTicking);
         this.currentWorldData.set(worldData);
         boolean drainedTasks = false;
+        boolean drainAbortedByBudget = false;
         boolean fallback = false;
         try {
-            drainedTasks = drainRegionTasks(regionizer, world, shouldKeepTicking);
+            final DrainResult drainResult = drainRegionTasks(regionizer, world, shouldKeepTicking);
+            drainedTasks = drainResult.drainedAny();
+            drainAbortedByBudget = drainResult.abortedByBudget();
             if (this.halted.get()) {
-                this.logFallback("Scheduler halted mid-tick; falling back to vanilla world tick for {}",
-                    world.getRegistryKey().getValue());
                 fallback = true;
-                return false;
+                return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_DURING_TICK,
+                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                        System.nanoTime() - tickStart));
             }
             if (!shouldKeepTicking.getAsBoolean()) {
-                this.logFallback("Server requested stop-ticking during scheduler pump for {}",
-                    world.getRegistryKey().getValue());
                 fallback = true;
-                return false;
+                return this.logFallback(world, FallbackReason.SERVER_BUDGET_EXHAUSTED_DURING_TICK,
+                    this.buildDiagnostics(world, "after-drain", drainedTasks, true,
+                        System.nanoTime() - tickStart));
             }
             worldData.populateChunkState(shouldKeepTicking);
             return true;
@@ -202,12 +206,17 @@ public final class TickRegionScheduler {
         this.scheduler.notifyTasks(handle);
     }
 
-    private boolean drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
-                                     final ServerWorld world,
-                                     final BooleanSupplier shouldKeepTicking) {
+    private DrainResult drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
+                                         final ServerWorld world,
+                                         final BooleanSupplier shouldKeepTicking) {
         boolean drainedAny = false;
+        boolean abortedByBudget = false;
         boolean continueDraining = true;
-        while (continueDraining && shouldKeepTicking.getAsBoolean()) {
+        while (continueDraining) {
+            if (!shouldKeepTicking.getAsBoolean()) {
+                abortedByBudget = true;
+                break;
+            }
             continueDraining = false;
             final boolean[] loopDrained = new boolean[1];
             regionizer.computeForAllRegions(region -> {
@@ -232,7 +241,10 @@ public final class TickRegionScheduler {
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
         }
-        return drainedAny;
+        if (abortedByBudget) {
+            this.logBudgetAbort(world, "drain-region-tasks", drainedAny, true);
+        }
+        return new DrainResult(drainedAny, abortedByBudget);
     }
 
     public RegionScheduleHandle createHandle(final RegionTickData data,
@@ -290,6 +302,19 @@ public final class TickRegionScheduler {
         final String worldId = describeWorld(world);
         LOGGER.warn("{} (world={})", message, worldId);
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message + " (world=" + worldId + ")");
+    }
+
+    public void logBudgetAbort(final ServerWorld world, final String stage) {
+        this.logBudgetAbort(world, stage, false, false);
+    }
+
+    public void logBudgetAbort(final ServerWorld world,
+                               final String stage,
+                               final boolean drainedTasks,
+                               final boolean abortedDrain) {
+        final FallbackDiagnostics diagnostics = this.buildDiagnostics(world, stage, drainedTasks, abortedDrain, -1L);
+        this.logFallbackMessage("Main-thread budget exhausted while orchestrating {} for {} ({})",
+            stage, describeWorld(world), diagnostics.describe());
     }
 
     void enterRegionContext(final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
@@ -448,7 +473,7 @@ public final class TickRegionScheduler {
         }
     }
 
-    private void logFallback(final String message, final Object... args) {
+    private void logFallbackMessage(final String message, final Object... args) {
         if (LOGGING_OPTIONS.logFallbacks()) {
             LOGGER.info(message, args);
             if (LOGGING_OPTIONS.logFallbackStacks()) {
@@ -456,6 +481,31 @@ public final class TickRegionScheduler {
             }
         }
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message, args);
+    }
+
+    private boolean logFallback(final ServerWorld world,
+                                final FallbackReason reason,
+                                final FallbackDiagnostics diagnostics) {
+        final String detail = diagnostics == null ? "stage=unknown" : diagnostics.describe();
+        this.logFallbackMessage("Scheduler fallback: reason={} (world={}, {})",
+            reason.description(), describeWorld(world), detail);
+        return false;
+    }
+
+    private FallbackDiagnostics buildDiagnostics(final ServerWorld world,
+                                                 final String stage,
+                                                 final boolean drainedTasks,
+                                                 final boolean abortedDrain,
+                                                 final long elapsedNanos) {
+        RegionizedWorldData worldData = null;
+        boolean handlingTick = false;
+        boolean activeRegions = false;
+        if (world instanceof RegionizedServerWorld regionized) {
+            worldData = regionized.ruthenium$getWorldRegionData();
+            handlingTick = worldData.isHandlingTick();
+            activeRegions = this.hasActiveRegions(world);
+        }
+        return new FallbackDiagnostics(stage, drainedTasks, handlingTick, activeRegions, abortedDrain, elapsedNanos);
     }
 
     private void handleWatchdogWarning(final Event event) {
@@ -561,6 +611,46 @@ public final class TickRegionScheduler {
 
     private static double nanosToMillis(final long nanos) {
         return nanos / 1_000_000.0D;
+    }
+
+    private record DrainResult(boolean drainedAny, boolean abortedByBudget) {
+    }
+
+    private enum FallbackReason {
+        SCHEDULER_HALTED_BEFORE_START("Scheduler halted before running world tick"),
+        SERVER_BUDGET_EXHAUSTED_BEFORE_START("Server requested stop-ticking before scheduler start"),
+        SCHEDULER_HALTED_DURING_TICK("Scheduler halted mid-tick"),
+        SERVER_BUDGET_EXHAUSTED_DURING_TICK("Server requested stop-ticking during scheduler pump");
+
+        private final String description;
+
+        FallbackReason(final String description) {
+            this.description = description;
+        }
+
+        public String description() {
+            return this.description;
+        }
+    }
+
+    private record FallbackDiagnostics(String stage,
+                                       boolean drainedTasks,
+                                       boolean handlingTick,
+                                       boolean activeRegions,
+                                       boolean abortedDrain,
+                                       long elapsedNanos) {
+
+        String describe() {
+            final String elapsed;
+            if (this.elapsedNanos >= 0L) {
+                elapsed = String.format(Locale.ROOT, "%.3f", nanosToMillis(this.elapsedNanos));
+            } else {
+                elapsed = "n/a";
+            }
+            return String.format(Locale.ROOT,
+                "stage=%s, drainedTasks=%s, handlingTick=%s, activeRegions=%s, abortedDrain=%s, elapsedMillis=%s",
+                this.stage, this.drainedTasks, this.handlingTick, this.activeRegions, this.abortedDrain, elapsed);
+        }
     }
 
     private static String formatStackTrace(final Thread thread) {

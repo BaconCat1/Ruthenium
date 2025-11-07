@@ -252,32 +252,32 @@ public final class RegionizedWorldData {
      * @param shouldKeepTicking supplier that may abort expensive work when headroom is exhausted
      */
     public void tickGlobalServices(final BooleanSupplier shouldKeepTicking) {
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services")) {
             return;
         }
 
         this.tickConnections(shouldKeepTicking);
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.connections")) {
             return;
         }
 
         this.tickWorldBorder();
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.worldBorder")) {
             return;
         }
 
         this.tickWeather();
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.weather")) {
             return;
         }
 
         this.updateSleepingPlayers();
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.sleeping")) {
             return;
         }
 
         this.tickRaids();
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.raids")) {
             return;
         }
 
@@ -304,7 +304,7 @@ public final class RegionizedWorldData {
     }
 
     private void tickConnections(final BooleanSupplier shouldKeepTicking) {
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "global-services.connections.players")) {
             return;
         }
         final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
@@ -322,7 +322,7 @@ public final class RegionizedWorldData {
      * @param shouldKeepTicking supplier used to abort work when deadlines are exceeded
      */
     public void populateChunkState(final BooleanSupplier shouldKeepTicking) {
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "populate-chunk-state")) {
             return;
         }
 
@@ -330,7 +330,7 @@ public final class RegionizedWorldData {
         final ServerChunkLoadingManager loadingManager = ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
 
         chunkManager.tick(shouldKeepTicking, false);
-        if (!shouldKeepTicking.getAsBoolean()) {
+        if (!this.shouldContinue(shouldKeepTicking, "populate-chunk-state.chunk-manager")) {
             return;
         }
 
@@ -391,6 +391,14 @@ public final class RegionizedWorldData {
         } else {
             raidManager.tick(this.world);
         }
+    }
+
+    private boolean shouldContinue(final BooleanSupplier shouldKeepTicking, final String stage) {
+        final boolean keepTicking = shouldKeepTicking.getAsBoolean();
+        if (!keepTicking) {
+            TickRegionScheduler.getInstance().logBudgetAbort(this.world, stage);
+        }
+        return keepTicking;
     }
 
     private void tickTime() {

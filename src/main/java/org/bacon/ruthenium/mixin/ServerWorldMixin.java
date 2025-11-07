@@ -86,23 +86,24 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         }
 
         RegionDebug.onWorldTick(world);
-        this.ruthenium$skipVanillaChunkTick = true;
+        this.ruthenium$skipVanillaChunkTick = false;
         final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
         if (replaced) {
+            // The scheduler fully replaced vanilla chunk ticking for this tick, so suppress the
+            // vanilla invocation to avoid double processing.
+            this.ruthenium$skipVanillaChunkTick = true;
             ci.cancel();
             return;
         }
 
+        this.ruthenium$skipVanillaChunkTick = false;
         if (scheduler.isHalted()) {
-            this.ruthenium$skipVanillaChunkTick = false;
             return;
         }
 
-        final boolean hasActiveRegions = scheduler.hasActiveRegions(world);
-        this.ruthenium$skipVanillaChunkTick = hasActiveRegions;
-        if (hasActiveRegions) {
+        if (scheduler.hasActiveRegions(world)) {
             scheduler.logSchedulerConflict(world,
-                "Preventing vanilla chunk tick because scheduler-managed regions remain active");
+                "Scheduler fell back to vanilla tick while regions remain active");
         }
     }
 

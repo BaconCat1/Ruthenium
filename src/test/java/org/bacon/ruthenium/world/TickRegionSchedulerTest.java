@@ -63,6 +63,6 @@ class TickRegionSchedulerTest {
 
     private static ServerWorld createStubWorld() {
         final RegistryKey<World> key = RegistryKey.of(RegistryKeys.WORLD, TEST_WORLD_ID);
-        return new ServerWorld(key, null);
+        return new ServerWorld(key);
     }
 }

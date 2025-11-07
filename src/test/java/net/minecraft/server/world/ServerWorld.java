@@ -5,6 +5,7 @@ import java.util.List;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.world.World;
+import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
@@ -17,8 +18,8 @@ import org.bacon.ruthenium.world.RegionizedWorldData;
 public final class ServerWorld implements RegionizedServerWorld {
 
     private final RegistryKey<World> registryKey;
-    private final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer;
     private final RegionizedWorldData worldData;
+    private ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer;
     private long time;
 
     public ServerWorld(final RegistryKey<World> registryKey,
@@ -35,8 +36,15 @@ public final class ServerWorld implements RegionizedServerWorld {
         this.worldData = new RegionizedWorldData(this);
     }
 
+    public ServerWorld(final RegistryKey<World> registryKey) {
+        this(registryKey, null, 0L);
+    }
+
     @Override
     public ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$getRegionizer() {
+        if (this.regionizer == null) {
+            this.regionizer = Ruthenium.createRegionizer(this);
+        }
         return this.regionizer;
     }
 
