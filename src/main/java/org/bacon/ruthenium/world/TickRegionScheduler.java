@@ -1,7 +1,6 @@
 package org.bacon.ruthenium.world;
 
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool;
-import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool.SchedulableTick;
 import ca.spottedleaf.concurrentutil.util.TimeUtil;
 import java.util.Locale;
 import java.util.Objects;
@@ -49,6 +48,7 @@ public final class TickRegionScheduler {
     private static final long MAIN_THREAD_WARN_NANOS = loadDuration("ruthenium.scheduler.mainThread.warnMillis", 200L, TimeUnit.MILLISECONDS);
     private static final long MAIN_THREAD_CRASH_NANOS = loadDuration("ruthenium.scheduler.mainThread.crashSeconds", 60L, TimeUnit.SECONDS);
 
+    @SuppressWarnings("deprecation") // concurrentutil 0.0.3 only provides the deprecated SchedulerThreadPool implementation
     private final SchedulerThreadPool scheduler;
     private final AtomicBoolean halted = new AtomicBoolean();
     private final RegionWatchdog watchdog;
@@ -68,6 +68,7 @@ public final class TickRegionScheduler {
         }, "Ruthenium-RegionScheduler-Shutdown"));
     }
 
+    @SuppressWarnings("deprecation") // SchedulerThreadPool is deprecated without a replacement in concurrentutil 0.0.3
     private TickRegionScheduler() {
         final ThreadFactory threadFactory = runnable -> {
             final Thread thread = new Thread(runnable, "Ruthenium Region Thread #" + THREAD_ID.incrementAndGet());
@@ -109,6 +110,7 @@ public final class TickRegionScheduler {
         return INSTANCE.currentWorldData.get();
     }
 
+    @SuppressWarnings("unused") // exposed for future region task integrations
     public static RegionScheduleHandle getCurrentHandle() {
         return INSTANCE.currentHandle.get();
     }
@@ -178,6 +180,7 @@ public final class TickRegionScheduler {
         this.scheduler.tryRetire(handle);
     }
 
+    @SuppressWarnings("unused") // retained for parity with Folia scheduling adjustments
     public boolean updateTickStartToMax(final RegionScheduleHandle handle, final long newStart) {
         Objects.requireNonNull(handle, "handle");
         final boolean adjusted = this.scheduler.updateTickStartToMax(handle, newStart);
@@ -187,6 +190,7 @@ public final class TickRegionScheduler {
         return adjusted;
     }
 
+    @SuppressWarnings("unused") // called by planned async scheduling hooks
     public void notifyRegionTasks(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
         this.scheduler.notifyTasks(handle);
@@ -364,9 +368,7 @@ public final class TickRegionScheduler {
             this.scheduler.halt(false, 0L);
         }
         final MinecraftServer server = world.getServer();
-        if (server != null) {
-            RegionShutdownThread.requestShutdown(server, this);
-        }
+        RegionShutdownThread.requestShutdown(server, this);
         handle.markNonSchedulable();
     }
 
@@ -512,9 +514,7 @@ public final class TickRegionScheduler {
         this.watchdog.shutdown();
         this.scheduler.halt(false, 0L);
         final MinecraftServer server = world.getServer();
-        if (server != null) {
-            RegionShutdownThread.requestShutdown(server, this);
-        }
+        RegionShutdownThread.requestShutdown(server, this);
     }
 
     private static double nanosToMillis(final long nanos) {
@@ -544,7 +544,8 @@ public final class TickRegionScheduler {
         return "region=" + region.id + "@" + centerStr + " world=" + worldId;
     }
 
-    public static final class RegionScheduleHandle extends SchedulableTick {
+    @SuppressWarnings("deprecation") // required while concurrentutil replaces SchedulableTick
+    public static final class RegionScheduleHandle extends SchedulerThreadPool.SchedulableTick {
 
         private final TickRegionScheduler scheduler;
         private final RegionTickData data;
@@ -552,7 +553,7 @@ public final class TickRegionScheduler {
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private long lastTickStart = SchedulerThreadPool.DEADLINE_NOT_SET;
         private final RegionTickStats tickStats = new RegionTickStats();
-    private final Schedule tickSchedule;
+        private final Schedule tickSchedule;
 
         private RegionScheduleHandle(final TickRegionScheduler scheduler,
                                      final RegionTickData data,
