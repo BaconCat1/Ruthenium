@@ -27,6 +27,13 @@
   - [x] Validate mixin targets and refmap generation
   - [x] Add debug commands (`/region info`, `/region stats`)
 
+### 0.5 Regionalize Every Tick Type (Folia Parity Goal)
+- [ ] Drive **all** world tick categories through the region scheduler so no vanilla chunk/entity tick paths run on the main thread unless the scheduler falls back intentionally.
+  - [ ] Regionize block/entity random ticks, block entity updates, scheduled block/fluid ticks, and block event queues.
+  - [ ] Ensure entity AI, vehicle logic, and player interaction packets are processed on the owning region thread.
+  - [ ] When tasks must cross region boundaries (entities moving, block events crossing, portal/teleport), enqueue transfers so the destination region owns the follow-up work.
+  - [ ] Validate every fallback path so it reports when something ran globally instead of regionally, mirroring Folia’s "no cross-region tick" guarantee.
+
 ### 1. Complete Scheduler Lifecycle Integration
 - [x] **Reconcile scheduler with vanilla tick flow**
   - [x] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
@@ -71,14 +78,14 @@
   - [ ] Integrate block event registration with region event queues
 
 ### 3. Thread Ownership & Synchronization
-- [ ] **Port thread ownership validation**
-  - [ ] Implement `RegionizedServer` thread ownership helpers:
-    - [ ] `isOwnedByCurrentRegion()` check for chunk/entity access
-    - [ ] `ensureOnRegionThread()` assertion helper
-    - [ ] `getCurrentRegion()` thread-local accessor
-    - [ ] `getRegionTickCount()` for per-region tick tracking
-  - [ ] Add thread validation to `ServerWorld` mixin accessors
-  - [ ] Expose ownership checks via `RegionizedServerWorld` interface
+- [x] **Port thread ownership validation**
+  - [x] Implement `RegionizedServer` thread ownership helpers:
+    - [x] `isOwnedByCurrentRegion()` check for chunk/entity access
+    - [x] `ensureOnRegionThread()` assertion helper
+    - [x] `getCurrentRegion()` thread-local accessor
+    - [x] `getRegionTickCount()` for per-region tick tracking
+  - [x] Add thread validation to `ServerWorld` mixin accessors
+  - [x] Expose ownership checks via `RegionizedServerWorld` interface
 
 - [ ] **Enforce thread safety in critical paths**
   - [ ] Patch `ServerChunkManager` with region thread assertions

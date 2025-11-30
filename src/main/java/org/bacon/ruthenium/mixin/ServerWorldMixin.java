@@ -3,16 +3,22 @@ package org.bacon.ruthenium.mixin;
 import java.util.function.BooleanSupplier;
 
 import net.minecraft.registry.RegistryKey;
+import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.profiler.Profiler;
+import net.minecraft.util.profiler.Profilers;
 import net.minecraft.village.raid.Raid;
 import net.minecraft.village.raid.RaidManager;
 import net.minecraft.world.World;
+import net.minecraft.world.EntityList;
 import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
+import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
+import org.bacon.ruthenium.world.RegionizedServer;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 import org.bacon.ruthenium.world.RegionizedWorldData;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
@@ -25,6 +31,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.world.tick.TickManager;
 
 /**
  * Injects lifecycle hooks that coordinate Ruthenium regions with the Minecraft world tick.
@@ -89,9 +96,11 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         this.ruthenium$skipVanillaChunkTick = false;
         final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
         if (replaced) {
-            // The scheduler fully replaced vanilla chunk ticking for this tick, so suppress the
-            // vanilla invocation to avoid double processing.
+            // The scheduler fully replaced chunk ticking, so manually run the vanilla entity and
+            // block-entity phases without executing the rest of the world tick twice.
             this.ruthenium$skipVanillaChunkTick = true;
+            this.ruthenium$runEntityPhase();
+            this.ruthenium$resetVanillaTickGuards();
             ci.cancel();
             return;
         }
@@ -122,6 +131,11 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "tickChunk", at = @At("HEAD"), cancellable = true)
     private void ruthenium$guardChunkTick(final WorldChunk chunk, final int randomTickSpeed, final CallbackInfo ci) {
+        final boolean onRegionThread = RegionizedServer.isOnRegionThread();
+        if (onRegionThread && this.ruthenium$regionChunkDepth == 0) {
+            throw new IllegalStateException("Region chunk tick invoked without entering guarded context");
+        }
+
         if (this.ruthenium$skipVanillaChunkTick && this.ruthenium$regionChunkDepth == 0) {
             ci.cancel();
             return;
@@ -138,13 +152,41 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Override
     public void ruthenium$pushRegionChunkTick() {
+        RegionizedServer.ensureOnRegionThread("chunk ticking");
         this.ruthenium$regionChunkDepth++;
     }
 
     @Override
     public void ruthenium$popRegionChunkTick() {
+        RegionizedServer.ensureOnRegionThread("chunk ticking");
         if (this.ruthenium$regionChunkDepth > 0) {
             this.ruthenium$regionChunkDepth--;
+        } else {
+            throw new IllegalStateException("Attempted to exit chunk tick guard without matching entry");
         }
+    }
+
+    @Unique
+    private void ruthenium$runEntityPhase() {
+        final ServerWorld world = (ServerWorld)(Object)this;
+        final TickManager tickManager = world.getTickManager();
+        final boolean tickAllowed = tickManager.shouldTick();
+        if (tickAllowed) {
+            ((ServerWorldAccessor)this).ruthenium$invokeProcessSyncedBlockEvents();
+        }
+        ((ServerWorldAccessor)this).ruthenium$setInBlockTick(false);
+        if (!tickAllowed) {
+            return;
+        }
+
+        final Profiler profiler = Profilers.get();
+        final EntityList entityList = ((ServerWorldAccessor)this).ruthenium$getEntityList();
+        entityList.forEach(entity ->
+            ((ServerWorldAccessor)this).ruthenium$invokeTickEntityLifecycle(tickManager, profiler, entity)
+        );
+
+        ((ServerWorldAccessor)this).ruthenium$invokeTickBlockEntities();
+        final ServerEntityManager<?> entityManager = ((ServerWorldAccessor)this).ruthenium$getEntityManager();
+        entityManager.tick();
     }
 }
