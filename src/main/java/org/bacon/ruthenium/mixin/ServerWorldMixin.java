@@ -5,12 +5,9 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.profiler.Profiler;
-import net.minecraft.util.profiler.Profilers;
 import net.minecraft.village.raid.Raid;
 import net.minecraft.village.raid.RaidManager;
 import net.minecraft.world.World;
-import net.minecraft.world.EntityList;
 import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
@@ -30,7 +27,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import net.minecraft.world.chunk.WorldChunk;
-import net.minecraft.world.tick.TickManager;
 
 /**
  * Injects lifecycle hooks that coordinate Ruthenium regions with the Minecraft world tick.
@@ -177,7 +173,6 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         final ServerWorld world = this.ruthenium$self();
         final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
         final boolean tickAllowed = worldData.isTickAllowed();
-        final TickManager tickManager = world.getTickManager();
         if (tickAllowed) {
             ((ServerWorldAccessor)this).ruthenium$invokeProcessSyncedBlockEvents();
         }
@@ -185,12 +180,6 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         if (!tickAllowed) {
             return;
         }
-
-        final Profiler profiler = Profilers.get();
-        final EntityList entityList = ((ServerWorldAccessor)this).ruthenium$getEntityList();
-        entityList.forEach(entity ->
-            ((ServerWorldAccessor)this).ruthenium$invokeTickEntityLifecycle(tickManager, profiler, entity)
-        );
 
         world.tickBlockEntities();
         ((ServerWorldAccessor)this).ruthenium$getEntityManager().tick();

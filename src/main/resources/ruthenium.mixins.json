@@ -7,9 +7,11 @@
   "mixins": [
     "MinecraftServerMixin",
     "ServerWorldMixin",
+    "ServerPlayNetworkHandlerMixin",
     "accessor.ServerWorldAccessor",
     "accessor.ServerChunkManagerAccessor",
     "accessor.ServerChunkLoadingManagerAccessor",
+    "accessor.ServerEntityManagerAccessor",
     "CheckedRandomMixin"
   ],
   "injectors": {

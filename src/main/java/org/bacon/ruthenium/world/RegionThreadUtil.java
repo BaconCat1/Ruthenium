@@ -150,8 +150,15 @@ public final class RegionThreadUtil {
      * @param chunkZ chunk Z coordinate
      * @param task   work to execute on the owning region thread
      */
-    public static void scheduleOnChunk(final ServerWorld world, final int chunkX, final int chunkZ, final Runnable task) {
-        RegionTaskDispatcher.runOnChunk(world, chunkX, chunkZ, task);
+    public static boolean scheduleOnChunk(final ServerWorld world,
+                                          final int chunkX,
+                                          final int chunkZ,
+                                          final Runnable task) {
+        if (RegionTaskDispatcher.runOnChunk(world, chunkX, chunkZ, task)) {
+            return true;
+        }
+        task.run();
+        return false;
     }
 
     /**
@@ -160,12 +167,10 @@ public final class RegionThreadUtil {
      * @param player player whose region should execute the task
      * @param task   work to run on the owning region thread
      */
-    public static void scheduleOnPlayer(final ServerPlayerEntity player, final Runnable task) {
+    public static boolean scheduleOnPlayer(final ServerPlayerEntity player, final Runnable task) {
         Objects.requireNonNull(player, "player");
         final ChunkPos pos = player.getChunkPos();
-        final ServerWorld world = TickRegionScheduler.getCurrentWorld();
-        if (world != null) {
-            scheduleOnChunk(world, pos.x, pos.z, task);
-        }
+        final ServerWorld world = player.getEntityWorld();
+        return scheduleOnChunk(world, pos.x, pos.z, task);
     }
 }

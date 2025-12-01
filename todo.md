@@ -30,7 +30,7 @@
 ### 0.5 Regionalize Every Tick Type (Folia Parity Goal)
 - [ ] Drive **all** world tick categories through the region scheduler so no vanilla chunk/entity tick paths run on the main thread unless the scheduler falls back intentionally.
   - [x] Regionize block/entity random ticks, block entity updates, scheduled block/fluid ticks, and block event queues.
-  - [ ] Ensure entity AI, vehicle logic, and player interaction packets are processed on the owning region thread.
+  - [x] Ensure entity AI, vehicle logic, and player interaction packets are processed on the owning region thread.
   - [ ] When tasks must cross region boundaries (entities moving, block events crossing, portal/teleport), enqueue transfers so the destination region owns the follow-up work.
   - [ ] Validate every fallback path so it reports when something ran globally instead of regionally, mirroring Folia’s "no cross-region tick" guarantee.
   - [ ] Fix issue involving shouldKeepTicking being completely ignored by vanilla (thanks mojang) causing fallbacks to vanilla ticks.

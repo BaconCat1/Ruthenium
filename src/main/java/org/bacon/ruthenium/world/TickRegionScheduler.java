@@ -2,6 +2,7 @@ package org.bacon.ruthenium.world;
 
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool;
 import ca.spottedleaf.concurrentutil.util.TimeUtil;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
@@ -11,17 +12,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import net.minecraft.entity.Entity;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ChunkLevelManager;
 import net.minecraft.server.world.ServerChunkManager;
+import net.minecraft.server.world.ServerChunkLoadingManager;
+import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.profiler.Profiler;
+import net.minecraft.util.profiler.Profilers;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.world.tick.TickManager;
+import net.minecraft.world.entity.SectionedEntityCache;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.debug.RegionDebug;
+import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
+import org.bacon.ruthenium.mixin.accessor.ServerEntityManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.region.RegionTaskQueue;
 import org.bacon.ruthenium.region.RegionTickData;
@@ -390,6 +403,7 @@ public final class TickRegionScheduler {
             }
             try {
                 ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
+                this.tickChunkEntities(world, chunkManager, chunkX, chunkZ);
                 tickedChunks++;
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
@@ -416,6 +430,68 @@ public final class TickRegionScheduler {
             "Region {} tick summary: chunksTicked={}, tasksProcessed={}, lagComp={}ns (world={})",
             region.id, tickedChunks, processedTasks, lagCompTick, world.getRegistryKey().getValue());
         return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void tickChunkEntities(final ServerWorld world,
+                                   final ServerChunkManager chunkManager,
+                                   final int chunkX,
+                                   final int chunkZ) {
+        final ServerChunkLoadingManager loadingManager =
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
+        final ChunkLevelManager levelManager = loadingManager.getLevelManager();
+        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+        if (!levelManager.shouldTickEntities(chunkKey)) {
+            return;
+        }
+
+        final TickManager tickManager = world.getTickManager();
+        final Profiler profiler = Profilers.get();
+        final ServerEntityManager<Entity> entityManager =
+            (ServerEntityManager<Entity>)((ServerWorldAccessor)world).ruthenium$getEntityManager();
+        final SectionedEntityCache<Entity> cache =
+            ((ServerEntityManagerAccessor)entityManager).ruthenium$getEntitySectionCache();
+
+        cache.getTrackingSections(chunkKey).forEach(section -> {
+            final List<Entity> entities = section.stream().collect(Collectors.toList());
+            for (final Entity entity : entities) {
+                this.tickRegionEntity(world, tickManager, profiler, levelManager, entity);
+            }
+        });
+    }
+
+    private void tickRegionEntity(final ServerWorld world,
+                                   final TickManager tickManager,
+                                   final Profiler profiler,
+                                   final ChunkLevelManager levelManager,
+                                   final Entity entity) {
+        if (entity == null || entity.isRemoved()) {
+            return;
+        }
+        if (tickManager.shouldSkipTick(entity)) {
+            return;
+        }
+
+        profiler.push("checkDespawn");
+        entity.checkDespawn();
+        profiler.pop();
+
+        final long entityChunkKey = entity.getChunkPos().toLong();
+        if (!(entity instanceof ServerPlayerEntity) && !levelManager.shouldTickEntities(entityChunkKey)) {
+            return;
+        }
+
+        final Entity vehicle = entity.getVehicle();
+        if (vehicle != null) {
+            if (!vehicle.isRemoved() && vehicle.hasPassenger(entity)) {
+                return;
+            }
+            entity.stopRiding();
+        }
+
+        profiler.push("tick");
+        ((ServerWorldAccessor)world).ruthenium$invokeTickEntityLifecycle(tickManager, profiler, entity);
+        profiler.pop();
     }
 
     private int runQueuedTasks(final RegionTickData data,

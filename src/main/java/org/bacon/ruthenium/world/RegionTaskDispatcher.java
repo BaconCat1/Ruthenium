@@ -23,15 +23,16 @@ public final class RegionTaskDispatcher {
 
     /**
      * Queues a task that should execute when the owning region next ticks the
-     * specified chunk. If the chunk is not currently registered with any
-     * region, the task executes immediately on the caller thread.
+     * specified chunk.
      *
      * @param world   the world containing the chunk
      * @param chunkX  chunk X coordinate
      * @param chunkZ  chunk Z coordinate
      * @param task    work to execute
+     *
+     * @return {@code true} when the task was queued for region execution
      */
-    public static void runOnChunk(final ServerWorld world, final int chunkX, final int chunkZ, final Runnable task) {
+    public static boolean runOnChunk(final ServerWorld world, final int chunkX, final int chunkZ, final Runnable task) {
         Objects.requireNonNull(world, "world");
         Objects.requireNonNull(task, "task");
 
@@ -39,11 +40,11 @@ public final class RegionTaskDispatcher {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
         if (region == null) {
             LOGGER.debug("Executing chunk task immediately because chunk {} is not yet regionised", new ChunkPos(chunkX, chunkZ));
-            task.run();
-            return;
+            return false;
         }
 
         region.getData().getTaskQueue().queueChunkTask(chunkX, chunkZ, task);
+        return true;
     }
 
     /**
