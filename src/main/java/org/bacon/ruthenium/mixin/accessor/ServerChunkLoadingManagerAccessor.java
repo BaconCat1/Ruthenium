@@ -11,4 +11,7 @@ public interface ServerChunkLoadingManagerAccessor {
 
     @Invoker("forEachBlockTickingChunk")
     void ruthenium$forEachBlockTickingChunk(Consumer<WorldChunk> consumer);
+
+    @Invoker("tickEntityMovement")
+    void ruthenium$invokeTickEntityMovement();
 }

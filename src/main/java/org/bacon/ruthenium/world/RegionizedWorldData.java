@@ -6,32 +6,37 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
+import net.minecraft.block.Block;
+import net.minecraft.fluid.Fluid;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
-import net.minecraft.server.world.ServerWorld;
 import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.server.world.ServerChunkManager;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.server.world.ChunkLevelManager;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.profiler.Profilers;
 import net.minecraft.village.raid.RaidManager;
-import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
+import net.minecraft.world.tick.WorldTickScheduler;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkLoadingManagerAccessor;
+import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
-import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
 import org.bacon.ruthenium.util.CoordinateUtil;
+import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
 
 /**
  * Minimal backing store for world-scoped data needed by the region scheduler. The implementation
  * mirrors the structure of Folia's {@code RegionizedWorldData} but intentionally limits the
  * maintained state to the pieces currently consumed by Ruthenium.
  */
-public final class RegionizedWorldData {
+public class RegionizedWorldData {
 
     private final ServerWorld world;
     private final Object chunkLock = new Object();
     private final LongSet tickingChunks = new LongOpenHashSet();
     private final LongSet entityTickingChunks = new LongOpenHashSet();
     private volatile boolean handlingTick;
+    private volatile boolean tickAllowed;
     private volatile long lagCompensationTick;
     private long redstoneGameTime;
     private int wakeupInactiveRemainingAnimals;
@@ -74,6 +79,13 @@ public final class RegionizedWorldData {
      */
     public void setHandlingTick(final boolean handlingTick) {
         this.handlingTick = handlingTick;
+    }
+
+    /**
+     * Returns whether the current tick allows world updates (mirrors {@link net.minecraft.world.tick.TickManager#shouldTick()}).
+     */
+    public boolean isTickAllowed() {
+        return this.tickAllowed;
     }
 
     /**
@@ -248,52 +260,30 @@ public final class RegionizedWorldData {
     /**
      * Ticks pending world services that must continue to execute on the orchestrator thread to
      * keep the world responsive.
-     *
-     * @param shouldKeepTicking supplier that may abort expensive work when headroom is exhausted
      */
-    public void tickGlobalServices(final BooleanSupplier shouldKeepTicking) {
-        if (!this.shouldContinue(shouldKeepTicking, "global-services")) {
-            return;
+    public void tickGlobalServices() {
+        this.tickConnections();
+        if (this.tickAllowed) {
+            this.tickWorldBorder();
+            this.tickWeather();
         }
-
-        this.tickConnections(shouldKeepTicking);
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.connections")) {
-            return;
-        }
-
-        this.tickWorldBorder();
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.worldBorder")) {
-            return;
-        }
-
-        this.tickWeather();
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.weather")) {
-            return;
-        }
-
         this.updateSleepingPlayers();
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.sleeping")) {
-            return;
+        if (this.tickAllowed) {
+            this.tickScheduledTickSchedulers();
+            this.tickRaids();
+            this.tickTime();
         }
-
-        this.tickRaids();
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.raids")) {
-            return;
-        }
-
-        this.tickTime();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
     }
 
     /**
      * Prepares the world for a new tick, updating timing data and running global services.
-     *
-     * @param shouldKeepTicking supplier used to abort work when deadlines are exceeded
      */
-    public void beginTick(final BooleanSupplier shouldKeepTicking) {
+    public void beginTick() {
         this.setHandlingTick(true);
+        this.tickAllowed = this.world.getTickManager().shouldTick();
         this.updateTickData();
-        this.tickGlobalServices(shouldKeepTicking);
+        this.tickGlobalServices();
     }
 
     /**
@@ -303,10 +293,7 @@ public final class RegionizedWorldData {
         this.setHandlingTick(false);
     }
 
-    private void tickConnections(final BooleanSupplier shouldKeepTicking) {
-        if (!this.shouldContinue(shouldKeepTicking, "global-services.connections.players")) {
-            return;
-        }
+    private void tickConnections() {
         final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
         for (final ServerPlayerEntity player : players) {
             final ServerPlayNetworkHandler networkHandler = player.networkHandler;
@@ -322,17 +309,12 @@ public final class RegionizedWorldData {
      * @param shouldKeepTicking supplier used to abort work when deadlines are exceeded
      */
     public void populateChunkState(final BooleanSupplier shouldKeepTicking) {
-        if (!this.shouldContinue(shouldKeepTicking, "populate-chunk-state")) {
-            return;
-        }
-
         final ServerChunkManager chunkManager = this.world.getChunkManager();
         final ServerChunkLoadingManager loadingManager = ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
 
         chunkManager.tick(shouldKeepTicking, false);
-        if (!this.shouldContinue(shouldKeepTicking, "populate-chunk-state.chunk-manager")) {
-            return;
-        }
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
+        ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
 
         final LongOpenHashSet newTicking = new LongOpenHashSet();
         ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$forEachBlockTickingChunk(chunk -> {
@@ -393,16 +375,20 @@ public final class RegionizedWorldData {
         }
     }
 
-    private boolean shouldContinue(final BooleanSupplier shouldKeepTicking, final String stage) {
-        final boolean keepTicking = shouldKeepTicking.getAsBoolean();
-        if (!keepTicking) {
-            TickRegionScheduler.getInstance().logBudgetAbort(this.world, stage);
-        }
-        return keepTicking;
-    }
-
     private void tickTime() {
         ((ServerWorldAccessor)this.world).ruthenium$invokeTickTime();
+    }
+
+    private void tickScheduledTickSchedulers() {
+        if (this.world.isDebugWorld()) {
+            return;
+        }
+        final long time = this.world.getTime();
+        final ServerWorldAccessor accessor = (ServerWorldAccessor)this.world;
+        final WorldTickScheduler<Block> blockTicks = this.world.getBlockTickScheduler();
+        blockTicks.tick(time, 65536, accessor::ruthenium$invokeTickBlock);
+        final WorldTickScheduler<Fluid> fluidTicks = this.world.getFluidTickScheduler();
+        fluidTicks.tick(time, 65536, accessor::ruthenium$invokeTickFluid);
     }
 
     /**

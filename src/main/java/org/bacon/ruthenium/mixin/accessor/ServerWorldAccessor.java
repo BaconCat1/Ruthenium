@@ -1,8 +1,11 @@
 package org.bacon.ruthenium.mixin.accessor;
 
+import net.minecraft.block.Block;
 import net.minecraft.entity.Entity;
+import net.minecraft.fluid.Fluid;
 import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.profiler.Profiler;
 import net.minecraft.world.EntityList;
 import net.minecraft.world.chunk.WorldChunk;
@@ -26,11 +29,14 @@ public interface ServerWorldAccessor {
     @Invoker("updateSleepingPlayers")
     void ruthenium$invokeUpdateSleepingPlayers();
 
+    @Invoker("tickBlock")
+    void ruthenium$invokeTickBlock(BlockPos pos, Block block);
+
+    @Invoker("tickFluid")
+    void ruthenium$invokeTickFluid(BlockPos pos, Fluid fluid);
+
     @Invoker("processSyncedBlockEvents")
     void ruthenium$invokeProcessSyncedBlockEvents();
-
-    @Invoker("tickBlockEntities")
-    void ruthenium$invokeTickBlockEntities();
 
     @Invoker("method_31420")
     void ruthenium$invokeTickEntityLifecycle(TickManager tickManager, Profiler profiler, Entity entity);

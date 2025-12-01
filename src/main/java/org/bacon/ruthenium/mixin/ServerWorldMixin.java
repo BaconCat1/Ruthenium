@@ -3,7 +3,6 @@ package org.bacon.ruthenium.mixin;
 import java.util.function.BooleanSupplier;
 
 import net.minecraft.registry.RegistryKey;
-import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.profiler.Profiler;
@@ -51,11 +50,17 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Unique
     private int ruthenium$regionChunkDepth;
 
+    @Unique
+    @SuppressWarnings({"ConstantConditions", "resource"})
+    private ServerWorld ruthenium$self() {
+        return (ServerWorld)(Object)this;
+    }
+
     @Override
     public ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> ruthenium$getRegionizer() {
         if (this.ruthenium$regionizer == null) {
-            this.ruthenium$regionizer = Ruthenium.createRegionizer((ServerWorld)(Object)this);
-            final RegistryKey<World> worldKey = ((ServerWorld)(Object)this).getRegistryKey();
+            this.ruthenium$regionizer = Ruthenium.createRegionizer(this.ruthenium$self());
+            final RegistryKey<World> worldKey = this.ruthenium$self().getRegistryKey();
             Ruthenium.getLogger().info("Created regionizer for world {}", worldKey.getValue());
         }
         return this.ruthenium$regionizer;
@@ -64,7 +69,7 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Override
     public RegionizedWorldData ruthenium$getWorldRegionData() {
         if (this.ruthenium$worldRegionData == null) {
-            this.ruthenium$worldRegionData = new RegionizedWorldData((ServerWorld)(Object)this);
+            this.ruthenium$worldRegionData = new RegionizedWorldData(this.ruthenium$self());
         }
         return this.ruthenium$worldRegionData;
     }
@@ -80,7 +85,7 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "tick", at = @At("HEAD"), cancellable = true)
     private void ruthenium$startRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
-        final ServerWorld world = (ServerWorld)(Object)this;
+        final ServerWorld world = this.ruthenium$self();
         final TickRegionScheduler scheduler = TickRegionScheduler.getInstance();
         final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
 
@@ -123,9 +128,9 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "getRaidAt", at = @At("HEAD"), cancellable = true)
     private void ruthenium$threadSafeRaidLookup(final BlockPos pos, final CallbackInfoReturnable<Raid> cir) {
-        final RaidManager raidManager = ((ServerWorld)(Object)this).getRaidManager();
+        final RaidManager raidManager = this.ruthenium$self().getRaidManager();
         if (raidManager instanceof RaidManagerThreadSafe threadSafe) {
-            cir.setReturnValue(threadSafe.ruthenium$getRaidFor((ServerWorld)(Object)this, pos, 9216));
+            cir.setReturnValue(threadSafe.ruthenium$getRaidFor(this.ruthenium$self(), pos, 9216));
         }
     }
 
@@ -167,10 +172,12 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     }
 
     @Unique
+    @SuppressWarnings("resource")
     private void ruthenium$runEntityPhase() {
-        final ServerWorld world = (ServerWorld)(Object)this;
+        final ServerWorld world = this.ruthenium$self();
+        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
+        final boolean tickAllowed = worldData.isTickAllowed();
         final TickManager tickManager = world.getTickManager();
-        final boolean tickAllowed = tickManager.shouldTick();
         if (tickAllowed) {
             ((ServerWorldAccessor)this).ruthenium$invokeProcessSyncedBlockEvents();
         }
@@ -185,8 +192,7 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             ((ServerWorldAccessor)this).ruthenium$invokeTickEntityLifecycle(tickManager, profiler, entity)
         );
 
-        ((ServerWorldAccessor)this).ruthenium$invokeTickBlockEntities();
-        final ServerEntityManager<?> entityManager = ((ServerWorldAccessor)this).ruthenium$getEntityManager();
-        entityManager.tick();
+        world.tickBlockEntities();
+        ((ServerWorldAccessor)this).ruthenium$getEntityManager().tick();
     }
 }

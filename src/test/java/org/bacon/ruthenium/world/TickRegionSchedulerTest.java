@@ -46,13 +46,13 @@ class TickRegionSchedulerTest {
     }
 
     @Test
-    void tickWorldFallsBackWhenServerRequestsStop() {
+    void tickWorldContinuesWhenServerBudgetExhausted() {
         final ServerWorld world = createStubWorld();
         this.haltedFlag.set(false);
 
-        final boolean skipped = this.scheduler.tickWorld(world, () -> false);
+        final boolean replaced = this.scheduler.tickWorld(world, () -> false);
 
-        Assertions.assertTrue(skipped, "tickWorld should skip vanilla ticking when shouldKeepTicking is false");
+        Assertions.assertTrue(replaced, "tickWorld should continue running regions even when shouldKeepTicking is false");
     }
 
     private static AtomicBoolean extractHaltedFlag(final TickRegionScheduler scheduler) throws Exception {

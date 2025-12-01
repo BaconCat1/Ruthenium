@@ -2,9 +2,11 @@ package net.minecraft.server.world;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.world.World;
+import net.minecraft.world.tick.TickManager;
 import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
@@ -19,6 +21,7 @@ public final class ServerWorld implements RegionizedServerWorld {
 
     private final RegistryKey<World> registryKey;
     private final RegionizedWorldData worldData;
+    private final TickManager tickManager;
     private ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer;
     private long time;
 
@@ -33,7 +36,8 @@ public final class ServerWorld implements RegionizedServerWorld {
         this.registryKey = registryKey;
         this.regionizer = regionizer;
         this.time = time;
-        this.worldData = new RegionizedWorldData(this);
+        this.worldData = new StubRegionizedWorldData(this);
+        this.tickManager = new TickManager();
     }
 
     public ServerWorld(final RegistryKey<World> registryKey) {
@@ -67,5 +71,26 @@ public final class ServerWorld implements RegionizedServerWorld {
 
     public List<ServerPlayerEntity> getPlayers() {
         return Collections.emptyList();
+    }
+
+    public TickManager getTickManager() {
+        return this.tickManager;
+    }
+
+    private static final class StubRegionizedWorldData extends RegionizedWorldData {
+
+        StubRegionizedWorldData(final ServerWorld world) {
+            super(world);
+        }
+
+        @Override
+        public void tickGlobalServices() {
+            // no-op for tests; scheduler behavior under test does not require world services
+        }
+
+        @Override
+        public void populateChunkState(final BooleanSupplier shouldKeepTicking) {
+            // no-op for tests; prevents access to chunk manager infrastructure during scheduler tests
+        }
     }
 }
