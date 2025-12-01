@@ -66,6 +66,17 @@ public final class RegionTaskQueue {
     }
 
     /**
+     * Returns the number of tasks currently queued.
+     *
+     * @return task count
+     */
+    public int size() {
+        synchronized (this) {
+            return this.chunkTasks.size();
+        }
+    }
+
+    /**
      * Removes all queued tasks.
      */
     public void clear() {

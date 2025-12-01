@@ -8,6 +8,7 @@ import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.command.RegionCommand;
+import org.bacon.ruthenium.command.RutheniumDebugCommand;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.RegionizerConfig;
@@ -43,6 +44,7 @@ public final class Ruthenium implements ModInitializer {
         // Register commands
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             RegionCommand.register(dispatcher);
+            RutheniumDebugCommand.register(dispatcher);
         });
 
         ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {

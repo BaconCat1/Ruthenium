@@ -47,7 +47,7 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private int ruthenium$regionChunkDepth;
 
     @Unique
-    @SuppressWarnings({"ConstantConditions", "resource"})
+    @SuppressWarnings({"ConstantConditions"})
     private ServerWorld ruthenium$self() {
         return (ServerWorld)(Object)this;
     }

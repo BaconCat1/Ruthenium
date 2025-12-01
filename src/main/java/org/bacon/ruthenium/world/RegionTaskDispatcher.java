@@ -40,10 +40,17 @@ public final class RegionTaskDispatcher {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
         if (region == null) {
             LOGGER.debug("Executing chunk task immediately because chunk {} is not yet regionised", new ChunkPos(chunkX, chunkZ));
+            try {
+                task.run();
+            } catch (final Throwable throwable) {
+                LOGGER.error("Immediate chunk task for {} failed", new ChunkPos(chunkX, chunkZ), throwable);
+            }
             return false;
         }
 
-        region.getData().getTaskQueue().queueChunkTask(chunkX, chunkZ, task);
+        final RegionTickData data = region.getData();
+        data.getTaskQueue().queueChunkTask(chunkX, chunkZ, task);
+        TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
         return true;
     }
 
@@ -74,7 +81,9 @@ public final class RegionTaskDispatcher {
             RegionTickData.decodeChunkX(chunkKey),
             RegionTickData.decodeChunkZ(chunkKey)
         );
-        region.getData().getTaskQueue().queueChunkTask(representative.x, representative.z, runnable);
+        final RegionTickData data = region.getData();
+        data.getTaskQueue().queueChunkTask(representative.x, representative.z, runnable);
+        TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
     }
 
     private static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> requireRegionizer(final ServerWorld world) {

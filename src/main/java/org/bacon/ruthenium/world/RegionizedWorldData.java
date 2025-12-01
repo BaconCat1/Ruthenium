@@ -3,6 +3,8 @@ package org.bacon.ruthenium.world;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.objects.Object2LongMap;
+import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
@@ -43,6 +45,7 @@ public class RegionizedWorldData {
     private int wakeupInactiveRemainingFlying;
     private int wakeupInactiveRemainingMonsters;
     private int wakeupInactiveRemainingVillagers;
+    private final Object2LongMap<String> budgetWarningTicks = new Object2LongOpenHashMap<>();
 
     /**
      * Creates a new world data wrapper for the supplied world.
@@ -52,6 +55,7 @@ public class RegionizedWorldData {
     public RegionizedWorldData(final ServerWorld world) {
         this.world = Objects.requireNonNull(world, "world");
         this.redstoneGameTime = world.getTime();
+        this.budgetWarningTicks.defaultReturnValue(Long.MIN_VALUE);
     }
 
     /**
@@ -401,6 +405,27 @@ public class RegionizedWorldData {
             for (final ChunkPos pos : chunks) {
                 this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));
             }
+        }
+    }
+
+    /**
+     * Determines whether the supplied scheduler budget warning should be logged.
+     *
+     * @param stage diagnostic stage requesting logging
+     * @return {@code true} if the warning should be emitted for the current tick
+     */
+    public boolean shouldLogBudgetWarning(final String stage) {
+        if (stage == null) {
+            return true;
+        }
+        synchronized (this.budgetWarningTicks) {
+            final long currentTick = this.world.getTime();
+            final long lastTick = this.budgetWarningTicks.getLong(stage);
+            if (lastTick == currentTick) {
+                return false;
+            }
+            this.budgetWarningTicks.put(stage, currentTick);
+            return true;
         }
     }
 }

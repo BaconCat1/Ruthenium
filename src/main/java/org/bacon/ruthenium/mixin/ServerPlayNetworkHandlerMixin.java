@@ -4,6 +4,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.network.NetworkThreadUtils;
 import net.minecraft.network.listener.PacketListener;
 import net.minecraft.network.packet.Packet;
+import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
@@ -65,6 +66,24 @@ public abstract class ServerPlayNetworkHandlerMixin {
         }
     }
 
+    @Inject(method = "onPlayerAction", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$schedulePlayerBlockAction(final PlayerActionC2SPacket packet, final CallbackInfo ci) {
+        final PlayerActionC2SPacket.Action action = packet.getAction();
+        if (action != PlayerActionC2SPacket.Action.START_DESTROY_BLOCK
+            && action != PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK
+            && action != PlayerActionC2SPacket.Action.ABORT_DESTROY_BLOCK) {
+            return;
+        }
+        final BlockPos pos = packet.getPos();
+        if (pos == null) {
+            return;
+        }
+        if (this.ruthenium$queueInteraction(pos.getX() >> 4, pos.getZ() >> 4,
+            () -> ((ServerPlayNetworkHandler)(Object)this).onPlayerAction(packet))) {
+            ci.cancel();
+        }
+    }
+
     @Redirect(method = "onPlayerInteractBlock",
         at = @At(value = "INVOKE",
             target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
@@ -93,6 +112,17 @@ public abstract class ServerPlayNetworkHandlerMixin {
     private <T extends PacketListener> void ruthenium$allowEntityInteractionOffThread(final Packet<T> packet,
                                                                                       final T handler,
                                                                                       final ServerWorld world) {
+        if (!RegionThreadUtil.isRegionThreadFor(world)) {
+            NetworkThreadUtils.forceMainThread(packet, handler, world);
+        }
+    }
+
+    @Redirect(method = "onPlayerAction",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
+    private <T extends PacketListener> void ruthenium$allowPlayerActionOffThread(final Packet<T> packet,
+                                                                                final T handler,
+                                                                                final ServerWorld world) {
         if (!RegionThreadUtil.isRegionThreadFor(world)) {
             NetworkThreadUtils.forceMainThread(packet, handler, world);
         }
