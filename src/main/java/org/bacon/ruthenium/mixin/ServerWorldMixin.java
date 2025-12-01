@@ -106,14 +106,16 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             return;
         }
 
+        // If the scheduler did not replace vanilla but regions are active, avoid fallback
+        // to vanilla chunk ticking to prevent double-processing. Allow vanilla only if
+        // the scheduler is explicitly halted.
         this.ruthenium$skipVanillaChunkTick = false;
-        if (scheduler.isHalted()) {
-            return;
-        }
-
-        if (scheduler.hasActiveRegions(world)) {
+        if (!scheduler.isHalted() && scheduler.hasActiveRegions(world)) {
             scheduler.logSchedulerConflict(world,
                 "Scheduler fell back to vanilla tick while regions remain active");
+            this.ruthenium$skipVanillaChunkTick = true;
+            ci.cancel();
+            return;
         }
     }
 
