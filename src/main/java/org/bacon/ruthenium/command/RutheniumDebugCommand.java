@@ -11,6 +11,7 @@ import java.util.Map;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.world.RegionTickMonitor;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 
 import static net.minecraft.server.command.CommandManager.literal;
@@ -28,7 +29,8 @@ public final class RutheniumDebugCommand {
             .requires(src -> src.hasPermissionLevel(2))
             .then(literal("dump").executes(ctx -> executeSchedulerDump(ctx.getSource())))
             .then(literal("threaddump").executes(ctx -> executeThreadDump(ctx.getSource())))
-            .then(literal("memorymapdump").executes(ctx -> executeMemoryDump(ctx.getSource())));
+            .then(literal("memorymapdump").executes(ctx -> executeMemoryDump(ctx.getSource())))
+            .then(literal("tickreport").executes(ctx -> executeTickReport(ctx.getSource())));
 
         dispatcher.register(root);
     }
@@ -79,6 +81,17 @@ public final class RutheniumDebugCommand {
         }
         source.sendFeedback(() -> Text.literal("Memory map dump written to console."), false);
         return pools.size() + collectors.size();
+    }
+
+    private static int executeTickReport(final ServerCommandSource source) {
+        final List<String> report = RegionTickMonitor.getInstance().buildReport();
+        report.forEach(line -> Ruthenium.getLogger().info("[ruthenium ticks] {}", line));
+        if (report.isEmpty()) {
+            source.sendFeedback(() -> Text.literal("No region tick data recorded."), false);
+        } else {
+            source.sendFeedback(() -> Text.literal("Region tick report written to console."), false);
+        }
+        return report.size();
     }
 
     private static long toMiB(final long bytes) {

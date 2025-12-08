@@ -77,7 +77,28 @@
   - [ ] Align player join/leave with region connection tracking
   - [ ] Integrate block event registration with region event queues
 
-### 3. Thread Ownership & Synchronization
+### 3. Eliminate Main Thread Ticking Paths
+- [ ] **Audit and block all vanilla tick entry points**
+  - [ ] Add assertions in `ServerWorld.tick()` to fail if regions are active
+  - [ ] Add assertions in `ServerChunkManager.tick()` for region-owned chunks
+  - [ ] Block `World.tickEntity()` when entity is region-owned
+  - [ ] Block `World.tickBlockEntities()` when chunks are region-owned
+  - [ ] Add logging when any vanilla tick method is called inappropriately
+
+- [ ] **Force scheduler orchestration only**
+  - [ ] Ensure `MinecraftServer.tickWorlds()` ONLY calls `TickRegionScheduler.tickWorld()`
+  - [ ] Remove or guard all vanilla ticking fallbacks
+  - [ ] Make fallback behavior explicitly opt-in via system property
+  - [ ] Add metrics for vanilla fallback frequency (should be zero in production)
+
+- [ ] **Validate main thread responsibilities**
+  - [ ] Main thread ONLY orchestrates scheduler
+  - [ ] Main thread ONLY ticks global services (weather, time, raids at world level)
+  - [ ] Main thread ONLY handles chunk loading/unloading coordination
+  - [ ] Main thread NEVER directly ticks chunks/entities/blocks
+  - [ ] Add thread assertions to verify these constraints
+
+### 4. Thread Ownership & Synchronization
 - [x] **Port thread ownership validation**
   - [x] Implement `RegionizedServer` thread ownership helpers:
     - [x] `isOwnedByCurrentRegion()` check for chunk/entity access
@@ -95,7 +116,7 @@
   - [ ] Add assertions to block update propagation (redstone, observers)
   - [ ] Validate command execution context (ensure proper region scheduling)
 
-### 4. Per-Region Networking
+### 5. Per-Region Networking
 - [ ] **Implement region-local connection management**
   - [ ] Port per-region network tick loop from Folia
   - [ ] Move player connection ticking to region threads
@@ -111,7 +132,7 @@
   - [ ] Update entity tracking for region transition
   - [ ] Handle client-side chunk loading during transfer
 
-### 5. Cross-Region Operations
+### 6. Cross-Region Operations
 - [ ] **Implement TeleportUtils for entity movement**
   - [ ] Port Folia `TeleportUtils` with Fabric entity API
   - [ ] Queue entity teleports when crossing region boundaries
@@ -133,7 +154,7 @@
     - [ ] Divide scheduled ticks by position
   - [ ] Add validation for state consistency after merge/split
 
-### 6. Scheduler Backlog & Performance
+### 7. Scheduler Backlog & Performance
 - [ ] **Complete backlog tracking**
   - [ ] Port Folia `TickData` class with tick time tracking
   - [ ] Implement `TickTime` utilities for time budget management
@@ -149,7 +170,34 @@
   - [ ] Profile and optimize hot paths in tick loop
   - [ ] Add config option for max tick time budget per region
 
-### 7. Testing & Validation
+### 8. Debugging & Diagnostics
+- [x] **Enhanced error handling and logging**
+  - [x] Comprehensive exception catching in region tick loop
+  - [x] Error tracking per region in `RegionTickMonitor`
+  - [x] Stall detection and automatic recovery attempts
+  - [x] Detailed scheduling state logging
+  - [x] Thread dump command for deadlock diagnosis
+
+- [x] **Improved tick monitoring**
+  - [x] Enhanced `/ruthenium tickreport` with status indicators (OK/SLOW/STALLED)
+  - [x] Min/max/average duration tracking per region
+  - [x] Error count and last error age tracking
+  - [x] Consecutive stall counter
+
+- [x] **Scheduler diagnostics**
+  - [x] Enhanced `/ruthenium dump` with thread pool state
+  - [x] Proactive stall detection with detailed warnings
+  - [x] Rescheduling attempt logging
+  - [x] Region lifecycle state tracking
+
+- [ ] **Remaining diagnostic improvements**
+  - [ ] Add thread-specific performance counters
+  - [ ] Track region merge/split frequency and duration
+  - [ ] Add histogram for tick duration distribution
+  - [ ] Implement tick timeline visualization command
+  - [ ] Add automatic thread dump on stall detection
+
+### 9. Testing & Validation
 - [ ] **Add comprehensive tests**
   - [ ] Test region merge/split task queue migration
   - [ ] Validate schedule handle reuse after region changes

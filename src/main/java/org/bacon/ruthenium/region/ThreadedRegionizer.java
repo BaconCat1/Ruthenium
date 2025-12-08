@@ -697,6 +697,8 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         private static final int STATE_TICKING       = 2;
         private static final int STATE_DEAD          = 3;
 
+        private static final String[] STATE_NAMES = {"TRANSIENT", "READY", "TICKING", "DEAD"};
+
         public final long id;
 
         private int state;
@@ -710,6 +712,17 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
         private final ReferenceOpenHashSet<ThreadedRegion<R, S>> mergeIntoLater = new ReferenceOpenHashSet<>();
         private final ReferenceOpenHashSet<ThreadedRegion<R, S>> expectingMergeFrom = new ReferenceOpenHashSet<>();
+
+        /**
+         * Returns a human-readable string representation of the region's current state for debugging purposes.
+         */
+        public String getStateForDebug() {
+            final int s = this.state;
+            if (s >= 0 && s < STATE_NAMES.length) {
+                return STATE_NAMES[s];
+            }
+            return "UNKNOWN(" + s + ")";
+        }
 
         public ThreadedRegion(final ThreadedRegionizer<R, S> regioniser) {
             this.regioniser = regioniser;
@@ -976,7 +989,12 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         public boolean tryMarkTicking(final BooleanSupplier abort) {
             this.regioniser.acquireWriteLock();
             try {
-                if (this.state != STATE_READY || abort.getAsBoolean()) {
+                final boolean abortResult = abort.getAsBoolean();
+                if (this.state != STATE_READY || abortResult) {
+                    if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                        LOGGER.info("[VERBOSE] tryMarkTicking region {} FAILED: state={} (expected READY=1), abort={}",
+                            this.id, this.getStateForDebug(), abortResult);
+                    }
                     return false;
                 }
 
@@ -985,6 +1003,10 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 }
 
                 this.state = STATE_TICKING;
+                if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] tryMarkTicking region {} SUCCESS: state now={}",
+                        this.id, this.getStateForDebug());
+                }
                 return true;
             } finally {
                 this.regioniser.releaseWriteLock();
@@ -995,12 +1017,21 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             this.regioniser.acquireWriteLock();
             try {
                 if (this.state != STATE_TICKING) {
+                    if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                        LOGGER.info("[VERBOSE] markNotTicking region {} FAILED: state={} (expected TICKING=2)",
+                            this.id, this.getStateForDebug());
+                    }
                     throw new IllegalStateException("Attempting to release non-locked state");
                 }
 
                 this.regioniser.onRegionRelease(this);
 
-                return this.state == STATE_READY;
+                final boolean isReady = this.state == STATE_READY;
+                if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] markNotTicking region {} SUCCESS: state now={}, isReady={}",
+                        this.id, this.getStateForDebug(), isReady);
+                }
+                return isReady;
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to release region " + this, throwable);
                 SneakyThrow.sneaky(throwable);

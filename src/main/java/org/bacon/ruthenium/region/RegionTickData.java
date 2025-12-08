@@ -17,6 +17,7 @@ import org.bacon.ruthenium.util.CoordinateUtil;
 import org.bacon.ruthenium.world.RegionTickStats;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 import org.bacon.ruthenium.world.RegionizedWorldData;
+import org.bacon.ruthenium.world.RegionTaskDispatcher;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 
 /**
@@ -163,6 +164,9 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         final RegionizedWorldData worldData = this.resolveWorldData();
         if (worldData != null) {
             worldData.addChunk(chunkX, chunkZ);
+        }
+        if (this.region != null) {
+            RegionTaskDispatcher.flushPendingChunkTasks(this.region.regioniser.world, chunkX, chunkZ, this);
         }
     }
 

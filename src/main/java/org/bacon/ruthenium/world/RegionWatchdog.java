@@ -170,6 +170,13 @@ public final class RegionWatchdog implements AutoCloseable {
         }
     }
 
+    /**
+     * Indicates whether the watchdog thread has been shut down.
+     */
+    public boolean isShutdown() {
+        return !this.running.get();
+    }
+
     private void runLoop() {
         while (this.running.get()) {
             try {

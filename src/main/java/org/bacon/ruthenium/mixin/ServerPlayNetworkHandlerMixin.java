@@ -5,6 +5,8 @@ import net.minecraft.network.NetworkThreadUtils;
 import net.minecraft.network.listener.PacketListener;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.network.packet.c2s.play.VehicleMoveC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
 import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
@@ -84,6 +86,24 @@ public abstract class ServerPlayNetworkHandlerMixin {
         }
     }
 
+    @Inject(method = "onPlayerMove", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$schedulePlayerMove(final PlayerMoveC2SPacket packet, final CallbackInfo ci) {
+        final ChunkPos chunkPos = this.player.getChunkPos();
+        if (this.ruthenium$queueInteraction(chunkPos.x, chunkPos.z,
+            () -> ((ServerPlayNetworkHandler)(Object)this).onPlayerMove(packet))) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "onVehicleMove", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$scheduleVehicleMove(final VehicleMoveC2SPacket packet, final CallbackInfo ci) {
+        final ChunkPos chunkPos = this.player.getChunkPos();
+        if (this.ruthenium$queueInteraction(chunkPos.x, chunkPos.z,
+            () -> ((ServerPlayNetworkHandler)(Object)this).onVehicleMove(packet))) {
+            ci.cancel();
+        }
+    }
+
     @Redirect(method = "onPlayerInteractBlock",
         at = @At(value = "INVOKE",
             target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
@@ -121,6 +141,28 @@ public abstract class ServerPlayNetworkHandlerMixin {
         at = @At(value = "INVOKE",
             target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
     private <T extends PacketListener> void ruthenium$allowPlayerActionOffThread(final Packet<T> packet,
+                                                                                final T handler,
+                                                                                final ServerWorld world) {
+        if (!RegionThreadUtil.isRegionThreadFor(world)) {
+            NetworkThreadUtils.forceMainThread(packet, handler, world);
+        }
+    }
+
+    @Redirect(method = "onPlayerMove",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
+    private <T extends PacketListener> void ruthenium$allowPlayerMoveOffThread(final Packet<T> packet,
+                                                                               final T handler,
+                                                                               final ServerWorld world) {
+        if (!RegionThreadUtil.isRegionThreadFor(world)) {
+            NetworkThreadUtils.forceMainThread(packet, handler, world);
+        }
+    }
+
+    @Redirect(method = "onVehicleMove",
+        at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/network/NetworkThreadUtils;forceMainThread(Lnet/minecraft/network/packet/Packet;Lnet/minecraft/network/listener/PacketListener;Lnet/minecraft/server/world/ServerWorld;)V"))
+    private <T extends PacketListener> void ruthenium$allowVehicleMoveOffThread(final Packet<T> packet,
                                                                                 final T handler,
                                                                                 final ServerWorld world) {
         if (!RegionThreadUtil.isRegionThreadFor(world)) {
