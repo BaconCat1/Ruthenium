@@ -44,7 +44,7 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private boolean ruthenium$skipVanillaChunkTick;
 
     @Unique
-    private int ruthenium$regionChunkDepth;
+    private final ThreadLocal<Integer> ruthenium$regionChunkDepth = ThreadLocal.withInitial(() -> 0);
 
     @Unique
     @SuppressWarnings({"ConstantConditions"})
@@ -132,35 +132,38 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Inject(method = "tickChunk", at = @At("HEAD"), cancellable = true)
     private void ruthenium$guardChunkTick(final WorldChunk chunk, final int randomTickSpeed, final CallbackInfo ci) {
         final boolean onRegionThread = RegionizedServer.isOnRegionThread();
-        if (onRegionThread && this.ruthenium$regionChunkDepth == 0) {
+        final int depth = this.ruthenium$regionChunkDepth.get();
+        if (onRegionThread && depth == 0) {
             throw new IllegalStateException("Region chunk tick invoked without entering guarded context");
         }
 
-        if (this.ruthenium$skipVanillaChunkTick && this.ruthenium$regionChunkDepth == 0) {
+        if (this.ruthenium$skipVanillaChunkTick && depth == 0) {
             ci.cancel();
             return;
         }
-        this.ruthenium$regionChunkDepth++;
+        this.ruthenium$regionChunkDepth.set(depth + 1);
     }
 
     @Inject(method = "tickChunk", at = @At("RETURN"))
     private void ruthenium$finishChunkTick(final WorldChunk chunk, final int randomTickSpeed, final CallbackInfo ci) {
-        if (this.ruthenium$regionChunkDepth > 0) {
-            this.ruthenium$regionChunkDepth--;
+        final int depth = this.ruthenium$regionChunkDepth.get();
+        if (depth > 0) {
+            this.ruthenium$regionChunkDepth.set(depth - 1);
         }
     }
 
     @Override
     public void ruthenium$pushRegionChunkTick() {
         RegionizedServer.ensureOnRegionThread("chunk ticking");
-        this.ruthenium$regionChunkDepth++;
+        this.ruthenium$regionChunkDepth.set(this.ruthenium$regionChunkDepth.get() + 1);
     }
 
     @Override
     public void ruthenium$popRegionChunkTick() {
         RegionizedServer.ensureOnRegionThread("chunk ticking");
-        if (this.ruthenium$regionChunkDepth > 0) {
-            this.ruthenium$regionChunkDepth--;
+        final int depth = this.ruthenium$regionChunkDepth.get();
+        if (depth > 0) {
+            this.ruthenium$regionChunkDepth.set(depth - 1);
         } else {
             throw new IllegalStateException("Attempted to exit chunk tick guard without matching entry");
         }

@@ -48,8 +48,8 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
     // Bundle Folia's scheduler utility so the server can load region threading classes at runtime.
-    modImplementation "ca.spottedleaf:concurrentutil:0.0.3"
-    include "ca.spottedleaf:concurrentutil:0.0.3"
+    modImplementation "ca.spottedleaf:concurrentutil:0.0.7"
+    include "ca.spottedleaf:concurrentutil:0.0.7"
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'

@@ -1,6 +1,10 @@
 package org.bacon.ruthenium.world;
 
+import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Supplier;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.ChunkPos;
@@ -17,6 +21,8 @@ import it.unimi.dsi.fastutil.longs.LongIterator;
 public final class RegionTaskDispatcher {
 
     private static final Logger LOGGER = LogManager.getLogger(RegionTaskDispatcher.class);
+    private static final Map<ServerWorld, ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>>> PENDING_CHUNK_TASKS =
+        new ConcurrentHashMap<>();
 
     private RegionTaskDispatcher() {
     }
@@ -39,13 +45,9 @@ public final class RegionTaskDispatcher {
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
         if (region == null) {
-            LOGGER.debug("Executing chunk task immediately because chunk {} is not yet regionised", new ChunkPos(chunkX, chunkZ));
-            try {
-                task.run();
-            } catch (final Throwable throwable) {
-                LOGGER.error("Immediate chunk task for {} failed", new ChunkPos(chunkX, chunkZ), throwable);
-            }
-            return false;
+            queuePendingChunkTask(world, chunkX, chunkZ, task);
+            LOGGER.debug("Queued pending chunk task for {} (region not ready)", new ChunkPos(chunkX, chunkZ));
+            return true;
         }
 
         final RegionTickData data = region.getData();
@@ -91,5 +93,39 @@ public final class RegionTaskDispatcher {
             throw new IllegalStateException("World " + world + " is missing RegionizedServerWorld support");
         }
         return regionized.ruthenium$getRegionizer();
+    }
+
+    private static void queuePendingChunkTask(final ServerWorld world,
+                                              final int chunkX,
+                                              final int chunkZ,
+                                              final Runnable task) {
+        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+        final ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>> byChunk =
+            PENDING_CHUNK_TASKS.computeIfAbsent(world, ignored -> new ConcurrentHashMap<>());
+        final ConcurrentLinkedQueue<Runnable> queue =
+            byChunk.computeIfAbsent(chunkKey, ignored -> new ConcurrentLinkedQueue<>());
+        queue.add(task);
+    }
+
+    public static void flushPendingChunkTasks(final ServerWorld world,
+                                              final int chunkX,
+                                              final int chunkZ,
+                                              final RegionTickData data) {
+        final ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>> byChunk = PENDING_CHUNK_TASKS.get(world);
+        if (byChunk == null) {
+            return;
+        }
+        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+        final Queue<Runnable> queue = byChunk.remove(chunkKey);
+        if (queue == null) {
+            return;
+        }
+        Runnable runnable;
+        while ((runnable = queue.poll()) != null) {
+            data.getTaskQueue().queueChunkTask(chunkX, chunkZ, runnable);
+        }
+        if (byChunk.isEmpty()) {
+            PENDING_CHUNK_TASKS.remove(world, byChunk);
+        }
     }
 }

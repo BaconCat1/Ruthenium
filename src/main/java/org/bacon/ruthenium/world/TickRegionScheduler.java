@@ -57,6 +57,13 @@ public final class TickRegionScheduler {
     private static final TickRegionScheduler INSTANCE = new TickRegionScheduler();
     private static final LoggingOptions LOGGING_OPTIONS = LoggingOptions.load(System::getProperty);
     private static final long TICK_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(1L) / 20L;
+
+    /**
+     * Hardcoded verbose logging flag for detailed scheduler diagnostics.
+     * Set to true to enable extensive logging of scheduler operations.
+     * This is useful for debugging stalling/stopping issues.
+     */
+    public static final boolean VERBOSE_LOGGING = Boolean.getBoolean("ruthenium.scheduler.verbose");
     private static final long WATCHDOG_WARN_NANOS = loadDuration("ruthenium.scheduler.watchdog.warnSeconds", 10L, TimeUnit.SECONDS);
     private static final long WATCHDOG_CRASH_NANOS = loadDuration("ruthenium.scheduler.watchdog.crashSeconds", 60L, TimeUnit.SECONDS);
     private static final long WATCHDOG_LOG_INTERVAL_NANOS = loadDuration("ruthenium.scheduler.watchdog.logIntervalSeconds", 5L, TimeUnit.SECONDS);
@@ -67,7 +74,8 @@ public final class TickRegionScheduler {
         loadDuration("ruthenium.scheduler.region.stallSeconds", 5L, TimeUnit.SECONDS);
     private static final long REGION_TICK_STALL_MILLIS = TimeUnit.NANOSECONDS.toMillis(REGION_TICK_STALL_NANOS);
 
-    @SuppressWarnings("deprecation") // concurrentutil 0.0.3 only provides the deprecated SchedulerThreadPool implementation
+    // Use SchedulerThreadPool from concurrentutil (same as Folia)
+    @SuppressWarnings("deprecation")
     private final SchedulerThreadPool scheduler;
     private final AtomicBoolean halted = new AtomicBoolean();
     private final RegionWatchdog watchdog;
@@ -88,17 +96,24 @@ public final class TickRegionScheduler {
         }, "Ruthenium-RegionScheduler-Shutdown"));
     }
 
-    @SuppressWarnings("deprecation") // SchedulerThreadPool is deprecated without a replacement in concurrentutil 0.0.3
+    @SuppressWarnings("deprecation")
     private TickRegionScheduler() {
-        final ThreadFactory threadFactory = runnable -> {
-            final Thread thread = new Thread(runnable, "Ruthenium Region Thread #" + THREAD_ID.incrementAndGet());
-            thread.setDaemon(true);
-            thread.setUncaughtExceptionHandler((thr, throwable) -> LOGGER.error("Unhandled exception in {}", thr.getName(), throwable));
-            return thread;
-        };
-
         final int processorCount = Runtime.getRuntime().availableProcessors();
         final int targetThreads = Math.max(1, processorCount <= 4 ? 1 : processorCount / 2);
+
+        // Create thread factory following Folia's pattern
+        final ThreadFactory threadFactory = new ThreadFactory() {
+            @Override
+            public Thread newThread(final Runnable runnable) {
+                final Thread thread = new Thread(runnable, "Ruthenium Region Thread #" + THREAD_ID.incrementAndGet());
+                thread.setDaemon(true);
+                thread.setUncaughtExceptionHandler((thr, throwable) -> {
+                    LOGGER.error("Unhandled exception in {}", thr.getName(), throwable);
+                });
+                return thread;
+            }
+        };
+
         this.scheduler = new SchedulerThreadPool(targetThreads, threadFactory);
         this.watchdog = new RegionWatchdog(
             WATCHDOG_WARN_NANOS,
@@ -144,13 +159,23 @@ public final class TickRegionScheduler {
         Objects.requireNonNull(shouldKeepTicking, "shouldKeepTicking");
 
         final long invocationStart = System.nanoTime();
+
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] tickWorld START for {} (halted={}, shouldKeepTicking={})",
+                describeWorld(world), this.halted.get(), shouldKeepTicking.getAsBoolean());
+        }
+
         if (this.halted.get()) {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] tickWorld HALTED - scheduler halted before start");
+            }
             return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_BEFORE_START,
                 this.buildDiagnostics(world, "pre-check", false, false,
                     System.nanoTime() - invocationStart));
         }
 
-        this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "pre-check", false, false);
+        final BooleanSupplier orchestratorGuard = this.composeOrchestratorBudget(shouldKeepTicking, invocationStart);
+        this.logBudgetAbortIfExceeded(world, orchestratorGuard, "pre-check", false, false);
 
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
         final RegionizedWorldData worldData = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
@@ -159,27 +184,25 @@ public final class TickRegionScheduler {
         worldData.beginTick();
         this.currentWorldData.set(worldData);
         boolean fallback = false;
-        final boolean hasActiveRegions = this.hasActiveRegions(world);
-        if (!hasActiveRegions) {
-            fallback = true;
-            return this.logFallback(world, FallbackReason.NO_ACTIVE_REGIONS,
-                this.buildDiagnostics(world, "pre-check", false, false,
-                    System.nanoTime() - tickStart));
-        }
-        
         try {
+            final DrainResult drainResult = drainRegionTasks(regionizer, world, shouldKeepTicking);
+            drainedTasks = drainResult.drainedAny();
+            drainAbortedByBudget = drainResult.abortedByBudget();
             if (this.halted.get()) {
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] tickWorld HALTED - scheduler halted during tick");
+                }
                 fallback = true;
                 return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_DURING_TICK,
                     this.buildDiagnostics(world, "after-drain", false, false,
                         System.nanoTime() - tickStart));
             }
-            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", false, true);
+            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", drainedTasks, true);
             worldData.populateChunkState(shouldKeepTicking);
-            if (hasActiveRegions && !this.hasRecentRegionTicks(world)) {
+            if (this.hasActiveRegions(world) && !this.hasRecentRegionTicks(world)) {
                 fallback = true;
                 return this.logFallback(world, FallbackReason.REGION_TICKS_STALLED,
-                    this.buildDiagnostics(world, "after-drain", false, false,
+                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
                         System.nanoTime() - tickStart));
             }
             return true;
@@ -188,29 +211,85 @@ public final class TickRegionScheduler {
             this.currentWorldData.remove();
             worldData.finishTick();
             final long duration = System.nanoTime() - tickStart;
-            this.checkMainThreadBudget(world, duration, false, fallback);
+            this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
         }
     }
 
     public void scheduleRegion(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
+
+        // Don't schedule if currently ticking - it will reschedule itself after the tick completes
+        if (handle.isCurrentlyTicking()) {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] scheduleRegion: skipping region {} - currently ticking", handle.getRegion().id);
+            }
+            return;
+        }
+
+        // Prepare the handle for activation BEFORE scheduling
+        // This ensures the scheduled start is set to a valid time
         handle.prepareForActivation();
+
+        final long scheduledStart = handle.getScheduledStartNanos();
+
+        // Validate the scheduled start is reasonable
+        if (scheduledStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
+            LOGGER.error("Cannot schedule region {} - scheduled start is DEADLINE_NOT_SET after prepareForActivation",
+                handle.getRegion().id);
+            return;
+        }
+
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] scheduleRegion: region {} in {} (scheduledStart={}, chunks={}, state={}, nonSchedulable={})",
+                handle.getRegion().id, handle.getWorld().getRegistryKey().getValue(),
+                scheduledStart, handle.getData().getChunks().size(),
+                handle.getRegion().getStateForDebug(), handle.isMarkedNonSchedulable());
+        }
+        LOGGER.info("Scheduling region {} in world {} (scheduledStart={}, chunks={})",
+            handle.getRegion().id, handle.getWorld().getRegistryKey().getValue(),
+            scheduledStart, handle.getData().getChunks().size());
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Schedule region {} in world {}",
             handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
-        this.scheduler.schedule(handle);
+
+        try {
+            this.scheduler.schedule(handle);
+        } catch (final Throwable throwable) {
+            LOGGER.error("Failed to schedule region {} - scheduler error", handle.getRegion().id, throwable);
+        }
     }
 
     public void descheduleRegion(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] descheduleRegion: region {} in {} (state={}, chunks={}, totalTicks={}, currentlyTicking={})",
+                handle.getRegion().id, handle.getWorld().getRegistryKey().getValue(),
+                handle.getRegion().getStateForDebug(), handle.getData().getChunks().size(),
+                handle.getData().getTickStats().getSampleCount(), handle.isCurrentlyTicking());
+        }
+        // Always mark non-schedulable first - this ensures the handle won't be rescheduled
         handle.markNonSchedulable();
+        LOGGER.info("Descheduling region {} in world {} (totalTicks={})",
+            handle.getRegion().id, handle.getWorld().getRegistryKey().getValue(),
+            handle.getData().getTickStats().getSampleCount());
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Deschedule region {} in world {}",
             handle.getRegion().id, handle.getWorld().getRegistryKey().getValue());
-        this.scheduler.tryRetire(handle);
+        // Only try to retire if the handle is not currently being processed
+        // If it's currently ticking, it will simply return false from runTick and not be rescheduled
+        if (!handle.isCurrentlyTicking()) {
+            this.scheduler.tryRetire(handle);
+        }
     }
 
     @SuppressWarnings("unused") // retained for parity with Folia scheduling adjustments
     public boolean updateTickStartToMax(final RegionScheduleHandle handle, final long newStart) {
         Objects.requireNonNull(handle, "handle");
+        // Don't update if currently ticking - it will reschedule itself after the tick completes
+        if (handle.isCurrentlyTicking()) {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] updateTickStartToMax: skipping region {} - currently ticking", handle.getRegion().id);
+            }
+            return false;
+        }
         final boolean adjusted = this.scheduler.updateTickStartToMax(handle, newStart);
         if (adjusted) {
             handle.onScheduledStartAdjusted(newStart);
@@ -221,9 +300,16 @@ public final class TickRegionScheduler {
     @SuppressWarnings("unused") // called by planned async scheduling hooks
     public void notifyRegionTasks(final RegionScheduleHandle handle) {
         Objects.requireNonNull(handle, "handle");
+        // Don't notify the scheduler if the handle is currently being processed
+        // This prevents race conditions that can corrupt the scheduler's internal linked list
+        if (handle.isCurrentlyTicking()) {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] notifyRegionTasks: skipping region {} - currently ticking", handle.getRegion().id);
+            }
+            return;
+        }
         this.scheduler.notifyTasks(handle);
     }
-
 
 
     public RegionScheduleHandle createHandle(final RegionTickData data,
@@ -269,35 +355,149 @@ public final class TickRegionScheduler {
     public boolean hasActiveRegions(final ServerWorld world) {
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
         final boolean[] active = new boolean[1];
+        final AtomicInteger totalRegions = new AtomicInteger();
+        final AtomicInteger activeCount = new AtomicInteger();
         regionizer.computeForAllRegions(region -> {
+            totalRegions.incrementAndGet();
             if (!region.getData().getChunks().isEmpty()) {
                 active[0] = true;
+                activeCount.incrementAndGet();
             }
         });
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] hasActiveRegions: totalRegions={}, regionsWithChunks={}, result={} for {}",
+                totalRegions.get(), activeCount.get(), active[0], describeWorld(world));
+        }
         return active[0];
     }
 
+    @SuppressWarnings("deprecation")
     private boolean hasRecentRegionTicks(final ServerWorld world) {
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
         final long now = System.nanoTime();
         final boolean[] recent = new boolean[1];
+        final List<Long> stalledRegions = new ArrayList<>();
+        final AtomicInteger checkedCount = new AtomicInteger();
+        final AtomicInteger skippedNoHandle = new AtomicInteger();
+        final AtomicInteger skippedNoChunks = new AtomicInteger();
+        final AtomicInteger skippedNonSchedulable = new AtomicInteger();
+
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] hasRecentRegionTicks START for {}", describeWorld(world));
+        }
+
         regionizer.computeForAllRegions(region -> {
+            checkedCount.incrementAndGet();
             if (recent[0]) {
                 return;
             }
             final RegionTickData data = region.getData();
+
+            // Skip regions with no chunks - they have nothing to tick
+            if (data.getChunks().isEmpty()) {
+                skippedNoChunks.incrementAndGet();
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} skipped - no chunks (state={})",
+                        region.id, region.getStateForDebug());
+                }
+                return;
+            }
+
             final RegionScheduleHandle handle;
             try {
                 handle = data.getScheduleHandle();
             } catch (final IllegalStateException ignored) {
+                skippedNoHandle.incrementAndGet();
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} skipped - no handle (state={})",
+                        region.id, region.getStateForDebug());
+                }
                 return;
             }
+
+            // Skip regions that are marked non-schedulable (dead, being merged, etc.)
+            if (handle.isMarkedNonSchedulable()) {
+                skippedNonSchedulable.incrementAndGet();
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} skipped - nonSchedulable (state={})",
+                        region.id, region.getStateForDebug());
+                }
+                return;
+            }
+
+            // If a region is currently TICKING, it's actively being processed - not stalled
+            // This prevents false stall detection for long-running ticks
+            final String stateStr = region.getStateForDebug();
+            if ("TICKING".equals(stateStr)) {
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - currently TICKING (chunks={})",
+                        region.id, data.getChunks().size());
+                }
+                recent[0] = true;
+                return;
+            }
+
             final long lastTickStart = handle.getLastTickStart();
-            if (lastTickStart != SchedulerThreadPool.DEADLINE_NOT_SET
-                && now - lastTickStart <= REGION_TICK_STALL_NANOS) {
+            final long scheduledStart = handle.getScheduledStartNanos();
+
+            if (lastTickStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                // Region has never ticked - check if it's newly scheduled
+                if (scheduledStart != SchedulerThreadPool.DEADLINE_NOT_SET && scheduledStart > now) {
+                    // Region is scheduled for the future - this is fine, consider it "recent"
+                    if (VERBOSE_LOGGING) {
+                        final long untilScheduledMs = TimeUnit.NANOSECONDS.toMillis(scheduledStart - now);
+                        LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - never ticked but scheduled in {}ms (state={}, chunks={})",
+                            region.id, untilScheduledMs, region.getStateForDebug(), data.getChunks().size());
+                    }
+                    recent[0] = true;
+                } else {
+                    stalledRegions.add(region.id);
+                    if (VERBOSE_LOGGING) {
+                        LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - never ticked, no future schedule (state={}, scheduledStart={}, chunks={})",
+                            region.id, region.getStateForDebug(), scheduledStart, data.getChunks().size());
+                    }
+                }
+            } else if (now - lastTickStart > REGION_TICK_STALL_NANOS) {
+                stalledRegions.add(region.id);
+                final long ageMillis = TimeUnit.NANOSECONDS.toMillis(now - lastTickStart);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - last tick {}ms ago (state={}, scheduledStart={}, chunks={})",
+                        region.id, ageMillis, region.getStateForDebug(),
+                        scheduledStart, data.getChunks().size());
+                }
+                LOGGER.warn("Region {} in {} has not ticked for {}ms (chunks={}, scheduledStart={}, isMarkedNonSchedulable={})",
+                    region.id, describeWorld(world), ageMillis, data.getChunks().size(),
+                    scheduledStart, handle.isMarkedNonSchedulable());
+            } else if (!handle.hasScheduledDeadline()) {
+                stalledRegions.add(region.id);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - lost deadline (state={}, lastStart={})",
+                        region.id, region.getStateForDebug(), lastTickStart);
+                }
+                LOGGER.warn("Region {} in {} lost its scheduled deadline (lastStart={}, chunks={})",
+                    region.id, describeWorld(world), lastTickStart, data.getChunks().size());
+                handle.prepareForActivation();
+                this.scheduler.notifyTasks(handle);
+            } else {
+                if (VERBOSE_LOGGING) {
+                    final long ageMillis = TimeUnit.NANOSECONDS.toMillis(now - lastTickStart);
+                    LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - last tick {}ms ago (state={}, chunks={})",
+                        region.id, ageMillis, region.getStateForDebug(), data.getChunks().size());
+                }
                 recent[0] = true;
             }
         });
+
+        if (!stalledRegions.isEmpty() && !recent[0]) {
+            LOGGER.error("ALL active regions in {} are stalled! Stalled regions: {}", describeWorld(world), stalledRegions);
+        }
+
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] hasRecentRegionTicks END: checked={}, skippedNoHandle={}, skippedNoChunks={}, skippedNonSchedulable={}, stalled={}, hasRecent={} for {}",
+                checkedCount.get(), skippedNoHandle.get(), skippedNoChunks.get(), skippedNonSchedulable.get(),
+                stalledRegions.size(), recent[0], describeWorld(world));
+        }
+
         return recent[0];
     }
 
@@ -368,10 +568,6 @@ public final class TickRegionScheduler {
         final ServerWorld world = region.regioniser.world;
         final RegionizedWorldData worldData = getCurrentWorldData();
 
-        if (worldData != null) {
-            worldData.tickRegionServices();
-        }
-
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, guard);
 
@@ -380,6 +576,8 @@ public final class TickRegionScheduler {
         final ServerChunkManager chunkManager = world.getChunkManager();
 
         int tickedChunks = 0;
+        int skippedNotContained = 0;
+        int skippedNotFull = 0;
         final long[] chunkSnapshot = data.getChunks().toLongArray();
         boolean chunkLoopAborted = false;
         for (int i = 0; i < chunkSnapshot.length; ++i) {
@@ -391,10 +589,12 @@ public final class TickRegionScheduler {
             final int chunkX = RegionTickData.decodeChunkX(chunkKey);
             final int chunkZ = RegionTickData.decodeChunkZ(chunkKey);
             if (!data.containsChunk(chunkX, chunkZ)) {
+                skippedNotContained++;
                 continue;
             }
             final Chunk chunk = chunkManager.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
             if (!(chunk instanceof WorldChunk worldChunk)) {
+                skippedNotFull++;
                 continue;
             }
 
@@ -423,6 +623,12 @@ public final class TickRegionScheduler {
         data.advanceCurrentTick();
         data.advanceRedstoneTick();
         final long lagCompTick = worldData == null ? -1L : worldData.getLagCompensationTick();
+
+        if (VERBOSE_LOGGING) {
+            LOGGER.info("[VERBOSE] tickRegion END region {}: total={}, ticked={}, skippedNotContained={}, skippedNotFull={}, tasks={}, aborted={}",
+                region.id, chunkSnapshot.length, tickedChunks, skippedNotContained, skippedNotFull, processedTasks, chunkLoopAborted);
+        }
+
         if (LOGGING_OPTIONS.logRegionSummaries()) {
             LOGGER.info("Region {} tick summary: chunksTicked={}, tasksProcessed={}, lagComp={}ns (world={})",
                 region.id, tickedChunks, processedTasks, lagCompTick, world.getRegistryKey().getValue());
@@ -430,6 +636,8 @@ public final class TickRegionScheduler {
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
             "Region {} tick summary: chunksTicked={}, tasksProcessed={}, lagComp={}ns (world={})",
             region.id, tickedChunks, processedTasks, lagCompTick, world.getRegistryKey().getValue());
+        RegionTickMonitor.getInstance().recordTick(world, region.id, tickedChunks, processedTasks,
+            System.nanoTime() - tickStart);
         return true;
     }
 
@@ -615,6 +823,24 @@ public final class TickRegionScheduler {
         if (!shouldKeepTicking.getAsBoolean()) {
             this.logBudgetAbort(world, stage, drainedTasks, abortedDrain);
         }
+    }
+
+    /**
+     * Builds a local main-thread budget guard for the orchestrator which tolerates
+     * vanilla's shouldKeepTicking() returning false too early by allowing work
+     * to proceed until the world-local 50ms window elapses. This prevents
+     * pathological immediate fallbacks while still bounding main-thread work.
+     */
+    private BooleanSupplier composeOrchestratorBudget(final BooleanSupplier serverGuard,
+                                                      final long startNanos) {
+        Objects.requireNonNull(serverGuard, "serverGuard");
+        return () -> {
+            if (serverGuard.getAsBoolean()) {
+                return true;
+            }
+            final long elapsed = System.nanoTime() - startNanos;
+            return elapsed < TICK_INTERVAL_NANOS;
+        };
     }
 
     private FallbackDiagnostics buildDiagnostics(final ServerWorld world,
@@ -808,7 +1034,11 @@ public final class TickRegionScheduler {
 
     public List<String> buildDebugDump() {
         final List<String> lines = new ArrayList<>();
+        lines.add("=== RUTHENIUM SCHEDULER DEBUG DUMP ===");
+        lines.add("Timestamp: " + System.currentTimeMillis());
         lines.add("Scheduler halted=" + this.halted.get());
+        lines.add("Thread pool: " + this.scheduler.toString());
+        lines.add("Watchdog active=" + !this.watchdog.isShutdown());
         final MinecraftServer server = this.serverRef.get();
         if (server == null) {
             lines.add("No server registered.");
@@ -867,6 +1097,7 @@ public final class TickRegionScheduler {
         return lines;
     }
 
+    @SuppressWarnings("deprecation")
     private List<RegionDebugInfo> gatherRegionDebugInfo(final ServerWorld world, final long now) {
         final List<RegionDebugInfo> infos = new ArrayList<>();
         if (!(world instanceof RegionizedServerWorld regionized)) {
@@ -908,13 +1139,21 @@ public final class TickRegionScheduler {
         return motd;
     }
 
-    @SuppressWarnings("deprecation") // required while concurrentutil replaces SchedulableTick
+    /**
+     * Handle for scheduling and managing a region's tick lifecycle.
+     * Extends SchedulableTick to integrate with SchedulerThreadPool.
+     *
+     * Following Folia's pattern where the handle is created with DEADLINE_NOT_SET
+     * and then setInitialStart() is called before scheduling.
+     */
+    @SuppressWarnings("deprecation")
     public static final class RegionScheduleHandle extends SchedulerThreadPool.SchedulableTick {
 
         private final TickRegionScheduler scheduler;
         private final RegionTickData data;
         private ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region;
         private final AtomicBoolean cancelled = new AtomicBoolean();
+        private final AtomicBoolean currentlyTicking = new AtomicBoolean();
         private long lastTickStart = SchedulerThreadPool.DEADLINE_NOT_SET;
         private final RegionTickStats tickStats = new RegionTickStats();
         private final Schedule tickSchedule;
@@ -925,8 +1164,10 @@ public final class TickRegionScheduler {
             this.scheduler = scheduler;
             this.data = data;
             this.region = region;
+            // Following Folia's pattern: initialize with DEADLINE_NOT_SET
+            // The tickSchedule is also initialized properly
+            this.setScheduledStart(SchedulerThreadPool.DEADLINE_NOT_SET);
             this.tickSchedule = new Schedule(SchedulerThreadPool.DEADLINE_NOT_SET);
-            this.updateScheduledStartInternal(SchedulerThreadPool.DEADLINE_NOT_SET);
         }
 
         public RegionTickData getData() {
@@ -945,6 +1186,14 @@ public final class TickRegionScheduler {
             return this.lastTickStart;
         }
 
+        public long getScheduledStartNanos() {
+            return this.getScheduledStart();
+        }
+
+        boolean hasScheduledDeadline() {
+            return this.getScheduledStart() != SchedulerThreadPool.DEADLINE_NOT_SET;
+        }
+
         void attachRegion(final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> newRegion) {
             this.region = Objects.requireNonNull(newRegion, "newRegion");
         }
@@ -952,18 +1201,52 @@ public final class TickRegionScheduler {
         public void copyStateFrom(final RegionScheduleHandle other) {
             this.lastTickStart = other.lastTickStart;
             this.tickStats.copyFrom(other.tickStats);
-            this.updateScheduledStartInternal(other.getScheduledStart());
-            this.tickSchedule.setLastPeriod(other.tickSchedule.getLastPeriod());
+            // Copy scheduled start - updateScheduledStartInternal also sets tickSchedule.lastPeriod correctly
+            final long otherScheduledStart = other.getScheduledStart();
+            final long otherLastPeriod = other.tickSchedule.getLastPeriod();
+            this.updateScheduledStartInternal(otherScheduledStart);
+            // Only copy the other's lastPeriod if it's a valid value (not Long.MIN_VALUE from uninitialized state)
+            // Otherwise, updateScheduledStartInternal already set it correctly based on scheduledStart
+            if (otherLastPeriod != SchedulerThreadPool.DEADLINE_NOT_SET) {
+                this.tickSchedule.setLastPeriod(otherLastPeriod);
+            }
         }
 
         void prepareForActivation() {
+            final boolean wasNonSchedulable = this.cancelled.get();
             this.cancelled.set(false);
-            if (this.getScheduledStart() == SchedulerThreadPool.DEADLINE_NOT_SET) {
+
+            // Always validate and fix tickSchedule to be consistent with scheduledStart
+            final long currentLastPeriod = this.tickSchedule.getLastPeriod();
+            final long currentScheduledStart = this.getScheduledStart();
+
+            if (!this.hasScheduledDeadline()) {
+                // No deadline set yet, create one
                 this.updateScheduledStartInternal(System.nanoTime() + TICK_INTERVAL_NANOS);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] prepareForActivation region {} - set new deadline (wasNonSchedulable={})",
+                        this.region.id, wasNonSchedulable);
+                }
+            } else if (currentLastPeriod == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                // scheduledStart is set but tickSchedule.lastPeriod is still DEADLINE_NOT_SET (Long.MIN_VALUE)
+                // This can happen if the handle was copied from an uninitialized template
+                // Fix by setting lastPeriod based on the existing scheduledStart
+                this.tickSchedule.setLastPeriod(currentScheduledStart - TICK_INTERVAL_NANOS);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] prepareForActivation region {} - fixed uninitialized lastPeriod (wasNonSchedulable={}, scheduledStart={})",
+                        this.region.id, wasNonSchedulable, currentScheduledStart);
+                }
+            } else if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] prepareForActivation region {} - already has deadline (wasNonSchedulable={})",
+                    this.region.id, wasNonSchedulable);
             }
         }
 
         void markNonSchedulable() {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] markNonSchedulable region {} (state={})",
+                    this.region.id, this.region.getStateForDebug());
+            }
             this.cancelled.set(true);
         }
 
@@ -971,29 +1254,74 @@ public final class TickRegionScheduler {
             return this.cancelled.get();
         }
 
+        public boolean isCurrentlyTicking() {
+            return this.currentlyTicking.get();
+        }
+
         @Override
         public boolean runTick() {
-            if (this.isMarkedNonSchedulable()) {
+            // Set the currently ticking flag to prevent race conditions with schedule/retire operations
+            if (!this.currentlyTicking.compareAndSet(false, true)) {
+                // Already being processed by another thread - this should not happen
+                LOGGER.error("Region {} runTick called while already ticking!", this.region.id);
                 return false;
+            }
+
+            try {
+                return runTickInternal();
+            } finally {
+                this.currentlyTicking.set(false);
+            }
+        }
+
+        private boolean runTickInternal() {
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] runTick START region {} (state={}, nonSchedulable={}, chunks={})",
+                    this.region.id, this.region.getStateForDebug(), this.isMarkedNonSchedulable(),
+                    this.data.getChunks().size());
+            }
+
+            if (this.isMarkedNonSchedulable()) {
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} SKIP - marked non-schedulable", this.region.id);
+                }
+                LOGGER.debug("Region {} skipping tick - marked non-schedulable", this.region.id);
+                return false;
+            }
+
+            final long tickStart = System.nanoTime();
+            // If this is the first tick (never ticked before), use 1; otherwise calculate periods ahead
+            final int tickCount = this.lastTickStart == SchedulerThreadPool.DEADLINE_NOT_SET
+                ? 1 : Math.max(1, this.tickSchedule.getPeriodsAhead(TICK_INTERVAL_NANOS, tickStart));
+
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] runTick region {} attempting tryMarkTicking (tickCount={}, lastTickStart={})",
+                    this.region.id, tickCount, this.lastTickStart);
             }
 
             if (!this.tryMarkTicking()) {
                 if (this.isMarkedNonSchedulable()) {
+                    if (VERBOSE_LOGGING) {
+                        LOGGER.info("[VERBOSE] runTick region {} became non-schedulable while trying to mark ticking", this.region.id);
+                    }
+                    LOGGER.debug("Region {} became non-schedulable while trying to mark ticking", this.region.id);
                     return false;
                 }
-                LOGGER.warn("Region {} could not acquire ticking state", this.region.id);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} tryMarkTicking FAILED (state={}) - will retry",
+                        this.region.id, this.region.getStateForDebug());
+                }
+                LOGGER.error("Region {} could not acquire ticking state - this should not happen! Attempting to reschedule.", this.region.id);
+                // Return true to try again later rather than stopping permanently
                 return true;
+            }
+
+            if (VERBOSE_LOGGING) {
+                LOGGER.info("[VERBOSE] runTick region {} tryMarkTicking SUCCESS - now TICKING", this.region.id);
             }
 
             final ServerWorld world = this.getWorld();
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable();
-            final long tickStart = System.nanoTime();
-            final int tickCount;
-            if (this.tickSchedule.getLastPeriod() == SchedulerThreadPool.DEADLINE_NOT_SET) {
-                tickCount = 1;
-            } else {
-                tickCount = Math.max(1, this.tickSchedule.getPeriodsAhead(TICK_INTERVAL_NANOS, tickStart));
-            }
             final RunningTick runningTick = this.scheduler == null ? null
                 : this.scheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
 
@@ -1004,27 +1332,60 @@ public final class TickRegionScheduler {
             this.scheduler.enterRegionContext(this.region, world, this);
             boolean success = false;
             long tickEnd = tickStart;
+            boolean readyForNext = true;
             try {
                 success = this.scheduler.tickRegion(this, guard);
                 tickEnd = System.nanoTime();
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} tickRegion returned success={} (duration={}ms)",
+                        this.region.id, success, nanosToMillis(tickEnd - tickStart));
+                }
             } catch (final Throwable throwable) {
-                this.scheduler.handleRegionFailure(this, throwable);
+                LOGGER.error("CRITICAL: Region {} failed during tick with exception", this.region.id, throwable);
+                RegionTickMonitor.getInstance().recordError(world, this.region.id);
+                readyForNext = false;
+                try {
+                    this.scheduler.handleRegionFailure(this, throwable);
+                } catch (final Throwable nested) {
+                    LOGGER.error("CRITICAL: Failed to handle region failure for region {}", this.region.id, nested);
+                }
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} EXCEPTION - returning false", this.region.id);
+                }
                 return false;
             } finally {
                 if (runningTick != null) {
-                    this.scheduler.watchdog.untrack(runningTick);
+                    try {
+                        this.scheduler.watchdog.untrack(runningTick);
+                    } catch (final Throwable throwable) {
+                        LOGGER.error("Failed to untrack watchdog for region {}", this.region.id, throwable);
+                    }
                 }
-                this.scheduler.exitRegionContext();
+                try {
+                    this.scheduler.exitRegionContext();
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to exit region context for region {}", this.region.id, throwable);
+                }
                 try {
                     this.region.markNotTicking();
+                    if (VERBOSE_LOGGING) {
+                        LOGGER.info("[VERBOSE] runTick region {} markNotTicking SUCCESS (state now={})",
+                            this.region.id, this.region.getStateForDebug());
+                    }
                 } catch (final Throwable throwable) {
-                    LOGGER.error("Failed to release region {} after tick", this.region.id, throwable);
+                    LOGGER.error("Failed to release region {} after tick - marking as non-schedulable", this.region.id, throwable);
                     this.cancelled.set(true);
+                    readyForNext = false;
                 }
             }
 
             if (!success) {
-                return false;
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} tickRegion returned false - will attempt reschedule", this.region.id);
+                }
+                LOGGER.warn("Region {} tick returned false - will attempt reschedule", this.region.id);
+                // Still try to reschedule even if tick returned false
+                return true;
             }
 
             this.lastTickStart = tickStart;
@@ -1032,11 +1393,81 @@ public final class TickRegionScheduler {
             this.tickStats.recordTickDuration(duration);
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick end region {}: {} ms", this.region.id, (duration / 1_000_000.0D));
-            this.tickSchedule.advanceBy(tickCount, TICK_INTERVAL_NANOS);
-            final long scheduledDeadline = this.tickSchedule.getDeadline(TICK_INTERVAL_NANOS);
-            final long nextStart = TimeUtil.getGreatestTime(tickEnd, scheduledDeadline);
-            this.updateScheduledStartInternal(nextStart);
-            return !this.isMarkedNonSchedulable();
+
+            long nextStart = tickEnd + TICK_INTERVAL_NANOS;
+            try {
+                final long lastPeriodBefore = this.tickSchedule.getLastPeriod();
+
+                // Safety check: if lastPeriod is still DEADLINE_NOT_SET (Long.MIN_VALUE),
+                // the schedule was never properly initialized. Fix it now.
+                if (lastPeriodBefore == SchedulerThreadPool.DEADLINE_NOT_SET) {
+                    LOGGER.warn("Region {} has uninitialized tickSchedule.lastPeriod - fixing now (tickStart={})",
+                        this.region.id, tickStart);
+                    this.tickSchedule.setLastPeriod(tickStart - TICK_INTERVAL_NANOS);
+                }
+
+                this.tickSchedule.advanceBy(tickCount, TICK_INTERVAL_NANOS);
+                final long lastPeriodAfter = this.tickSchedule.getLastPeriod();
+                final long scheduledDeadline = this.tickSchedule.getDeadline(TICK_INTERVAL_NANOS);
+
+                // Protect against overflow - if the scheduled deadline looks invalid, use the fallback
+                final long calculatedNext = TimeUtil.getGreatestTime(tickEnd, scheduledDeadline);
+
+                // Sanity check: if the calculated next start is more than 60 seconds in the past
+                // or more than 60 seconds in the future, something went wrong
+                final long now = System.nanoTime();
+                final long maxFuture = now + TimeUnit.SECONDS.toNanos(60L);
+                final long maxPast = now - TimeUnit.SECONDS.toNanos(60L);
+
+                if (calculatedNext < maxPast || calculatedNext > maxFuture) {
+                    // Schedule is invalid, use fallback
+                    LOGGER.warn("Region {} schedule calculation resulted in invalid value: calculatedNext={}, tickEnd={}, scheduledDeadline={}, lastPeriodBefore={}, lastPeriodAfter={} - using fallback",
+                        this.region.id, calculatedNext, tickEnd, scheduledDeadline, lastPeriodBefore, lastPeriodAfter);
+                    // Reset the schedule to a sane value
+                    this.tickSchedule.setLastPeriod(tickEnd);
+                    nextStart = tickEnd + TICK_INTERVAL_NANOS;
+                } else {
+                    nextStart = calculatedNext;
+                }
+
+                this.setScheduledStart(nextStart);
+                final long delayMillis = TimeUnit.NANOSECONDS.toMillis(nextStart - now);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} schedule updated: nextStart={}, delayMs={}, lastPeriod={}, deadline={}",
+                        this.region.id, nextStart, delayMillis, lastPeriodAfter, scheduledDeadline);
+                }
+                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                    "Region {} rescheduled for {}ms from now (nextStart={})",
+                    this.region.id, delayMillis, nextStart);
+            } catch (final Throwable throwable) {
+                LOGGER.error("Failed to update schedule for region {} - using fallback schedule", this.region.id, throwable);
+                // Set a fallback schedule
+                this.setScheduledStart(nextStart);
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} using fallback schedule due to exception", this.region.id);
+                }
+                // Still return true to keep trying
+                return true;
+            }
+
+            final boolean willReschedule = readyForNext && !this.isMarkedNonSchedulable();
+            if (!willReschedule) {
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} END - will NOT reschedule! (readyForNext={}, nonSchedulable={}, state={}, chunks={})",
+                        this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getStateForDebug(), this.data.getChunks().size());
+                }
+                LOGGER.error("Region {} will NOT be rescheduled! (readyForNext={}, nonSchedulable={}, chunks={})",
+                    this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.data.getChunks().size());
+            } else {
+                if (VERBOSE_LOGGING) {
+                    LOGGER.info("[VERBOSE] runTick region {} END - will reschedule (state={}, nextStart={}, tickCount={})",
+                        this.region.id, this.region.getStateForDebug(), nextStart, tickCount);
+                }
+                RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                    "Region {} will be rescheduled (nextStart={}, tickCount={})",
+                    this.region.id, nextStart, tickCount);
+            }
+            return willReschedule;
         }
 
         @Override
@@ -1083,7 +1514,11 @@ public final class TickRegionScheduler {
         private void updateScheduledStartInternal(final long scheduledStart) {
             this.setScheduledStart(scheduledStart);
             if (scheduledStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
-                this.tickSchedule.setLastPeriod(scheduledStart);
+                // Don't set lastPeriod to DEADLINE_NOT_SET directly, it causes overflow
+                // Instead, set it to a reasonable "not set" state by leaving it alone
+                // or setting to current time minus interval
+                final long now = System.nanoTime();
+                this.tickSchedule.setLastPeriod(now - TICK_INTERVAL_NANOS);
             } else {
                 this.tickSchedule.setLastPeriod(scheduledStart - TICK_INTERVAL_NANOS);
             }
@@ -1091,24 +1526,30 @@ public final class TickRegionScheduler {
 
         private void onScheduledStartAdjusted(final long newStart) {
             if (newStart == SchedulerThreadPool.DEADLINE_NOT_SET) {
-                this.tickSchedule.setLastPeriod(newStart);
+                // Same protection as above
+                final long now = System.nanoTime();
+                this.tickSchedule.setLastPeriod(now - TICK_INTERVAL_NANOS);
             } else {
                 this.tickSchedule.setLastPeriod(newStart - TICK_INTERVAL_NANOS);
             }
         }
     }
 
-    private record RegionDebugInfo(long regionId,
-                                   int chunkCount,
-                                   int pendingTasks,
-                                   double lastTickMillis,
-                                   long lastTickAgeMillis) {
-
+    private record RegionDebugInfo(long regionId, int chunkCount, int pendingTasks, double lastTickMillis, long lastTickAgeMillis) {
         boolean isStalled() {
-            return this.lastTickAgeMillis < 0L || this.lastTickAgeMillis > REGION_TICK_STALL_MILLIS;
+            return this.lastTickAgeMillis >= 0L && this.lastTickAgeMillis > REGION_TICK_STALL_MILLIS;
+        }
+
+        long ageMillis() {
+            return this.lastTickAgeMillis;
+        }
+
+        double lastTickAgeSeconds() {
+            return this.lastTickAgeMillis / 1000.0D;
         }
     }
 
+    // Made package-visible for test access
     static final class LoggingOptions {
 
         private static final String LOG_FALLBACK = "ruthenium.scheduler.logFallback";
@@ -1124,10 +1565,10 @@ public final class TickRegionScheduler {
         private final boolean logTaskQueueProcessing;
 
         private LoggingOptions(final boolean logFallbacks,
-                               final boolean logFallbackStacks,
-                               final boolean logDrainedTasks,
-                               final boolean logRegionSummaries,
-                               final boolean logTaskQueueProcessing) {
+                                final boolean logFallbackStacks,
+                                final boolean logDrainedTasks,
+                                final boolean logRegionSummaries,
+                                final boolean logTaskQueueProcessing) {
             this.logFallbacks = logFallbacks;
             this.logFallbackStacks = logFallbackStacks;
             this.logDrainedTasks = logDrainedTasks;
@@ -1135,13 +1576,13 @@ public final class TickRegionScheduler {
             this.logTaskQueueProcessing = logTaskQueueProcessing;
         }
 
-        static LoggingOptions load(final Function<String, String> propertyProvider) {
-            Objects.requireNonNull(propertyProvider, "propertyProvider");
-            final boolean fallback = loadBoolean(propertyProvider, LOG_FALLBACK, true);
-            final boolean fallbackStacks = loadBoolean(propertyProvider, LOG_FALLBACK_STACKS, false);
-            final boolean drained = loadBoolean(propertyProvider, LOG_DRAINED_TASKS, false);
-            final boolean summaries = loadBoolean(propertyProvider, LOG_REGION_SUMMARIES, false);
-            final boolean taskQueue = loadBoolean(propertyProvider, LOG_TASK_QUEUE, false);
+        static LoggingOptions load(Function<String, String> valueProvider) {
+            Objects.requireNonNull(valueProvider, "propertyProvider");
+            final boolean fallback = loadBoolean(valueProvider, LOG_FALLBACK, true);
+            final boolean fallbackStacks = loadBoolean(valueProvider, LOG_FALLBACK_STACKS, false);
+            final boolean drained = loadBoolean(valueProvider, LOG_DRAINED_TASKS, false);
+            final boolean summaries = loadBoolean(valueProvider, LOG_REGION_SUMMARIES, false);
+            final boolean taskQueue = loadBoolean(valueProvider, LOG_TASK_QUEUE, false);
             return new LoggingOptions(fallback, fallbackStacks, drained, summaries, taskQueue);
         }
 
