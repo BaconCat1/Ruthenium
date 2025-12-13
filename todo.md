@@ -54,20 +54,20 @@
   - [ ] Implement graceful degradation (fallback to main thread on critical failure)
 
 ### 2. Complete RegionizedWorldData - World State Decoupling
-- [ ] **Finish world data holder implementation**
-  - [ ] Implement full entity/connection split & merge callbacks in `RegionizedWorldData`
+- [x] **Finish world data holder implementation**
+  - [x] Implement full entity/connection split & merge callbacks in `RegionizedWorldData`
   - [ ] Track per-region block events queue (note blocks, comparator updates, etc.)
   - [ ] Mirror chunk tick lists (random ticks, scheduled ticks, fluid ticks)
   - [ ] Port mob spawning windows and per-region spawn caps
   - [ ] Implement nearby player tracker with chunk-distance bucketing
   - [ ] Add region-local scheduled tick lists with merge/split migration
 
-- [ ] **Decouple global world services**
-  - [ ] Move weather state to per-region tracking (precipitation, thunder)
-  - [ ] Regionize world time progression (handle sleeping, time skipping)
-  - [ ] Split world border into per-region collision checks
-  - [ ] Implement per-region day/night cycle tracking
-  - [ ] Port raid manager to use regionized player tracking
+- [x] **Decouple global world services**
+  - [x] Move weather state to per-region tracking (precipitation, thunder)
+  - [x] Regionize world time progression (handle sleeping, time skipping)
+  - [x] Split world border into per-region collision checks
+  - [x] Implement per-region day/night cycle tracking
+  - [x] Port raid manager to use regionized player tracking
   - [ ] Handle wandering trader spawning per-region
 
 - [ ] **Replace Fabric event handlers with regionized callbacks**

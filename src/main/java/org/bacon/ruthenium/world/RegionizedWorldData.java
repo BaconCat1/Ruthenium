@@ -5,10 +5,14 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import net.minecraft.block.Block;
+import net.minecraft.entity.Entity;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
@@ -46,6 +50,9 @@ public class RegionizedWorldData {
     private int wakeupInactiveRemainingMonsters;
     private int wakeupInactiveRemainingVillagers;
     private final Object2LongMap<String> budgetWarningTicks = new Object2LongOpenHashMap<>();
+
+    private final List<ServerPlayerEntity> players = new ArrayList<>();
+    private final List<Entity> entities = new ArrayList<>();
 
     /**
      * Creates a new world data wrapper for the supplied world.
@@ -266,18 +273,20 @@ public class RegionizedWorldData {
      * keep the world responsive.
      */
     public void tickGlobalServices() {
-        this.tickConnections();
+        // this.tickConnections(); // Regionized
         if (this.tickAllowed) {
             this.tickWorldBorder();
             this.tickWeather();
+            this.tickTime();
+            this.tickScheduledTickSchedulers(); // TODO: Regionize
+            this.tickRaids(); // TODO: Regionize
         }
         this.updateSleepingPlayers();
-        if (this.tickAllowed) {
-            this.tickScheduledTickSchedulers();
-            this.tickRaids();
-            this.tickTime();
-        }
         this.resetMobWakeupBudgets(4, 8, 2, 4);
+    }
+
+    public void tickRegionServices() {
+        this.tickConnections();
     }
 
     /**
@@ -298,12 +307,88 @@ public class RegionizedWorldData {
     }
 
     private void tickConnections() {
-        final List<ServerPlayerEntity> players = List.copyOf(this.world.getPlayers()); // avoids CME when handlers disconnect players
+        final List<ServerPlayerEntity> players = List.copyOf(this.players); // avoids CME when handlers disconnect players
         for (final ServerPlayerEntity player : players) {
             final ServerPlayNetworkHandler networkHandler = player.networkHandler;
             if (networkHandler != null) {
                 networkHandler.tick();
             }
+        }
+    }
+
+    public void addPlayer(final ServerPlayerEntity player) {
+        this.players.add(player);
+    }
+
+    public void removePlayer(final ServerPlayerEntity player) {
+        this.players.remove(player);
+    }
+
+    public void addEntity(final Entity entity) {
+        this.entities.add(entity);
+    }
+
+    public void removeEntity(final Entity entity) {
+        this.entities.remove(entity);
+    }
+
+    public void merge(final RegionizedWorldData other) {
+        this.players.addAll(other.players);
+        this.entities.addAll(other.entities);
+        synchronized (this.chunkLock) {
+            this.tickingChunks.addAll(other.tickingChunks);
+            this.entityTickingChunks.addAll(other.entityTickingChunks);
+        }
+    }
+
+    public void split(final int chunkToRegionShift,
+                      final Long2ReferenceOpenHashMap<RegionizedWorldData> regionToData,
+                      final ReferenceOpenHashSet<RegionizedWorldData> dataSet) {
+        for (final ServerPlayerEntity player : this.players) {
+            final ChunkPos pos = player.getChunkPos();
+            final long regionKey = CoordinateUtil.getChunkKey(pos.x >> chunkToRegionShift, pos.z >> chunkToRegionShift);
+            final RegionizedWorldData target = regionToData.get(regionKey);
+            if (target != null) {
+                target.addPlayer(player);
+            }
+        }
+        for (final Entity entity : this.entities) {
+            final ChunkPos pos = entity.getChunkPos();
+            final long regionKey = CoordinateUtil.getChunkKey(pos.x >> chunkToRegionShift, pos.z >> chunkToRegionShift);
+            final RegionizedWorldData target = regionToData.get(regionKey);
+            if (target != null) {
+                target.addEntity(entity);
+            }
+        }
+        synchronized (this.chunkLock) {
+            final LongIterator iterator = this.tickingChunks.iterator();
+            while (iterator.hasNext()) {
+                final long chunkKey = iterator.nextLong();
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.addChunk(chunkX, chunkZ);
+                }
+            }
+            final LongIterator entityIterator = this.entityTickingChunks.iterator();
+            while (entityIterator.hasNext()) {
+                final long chunkKey = entityIterator.nextLong();
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.markEntityTickingChunk(chunkX, chunkZ);
+                }
+            }
+        }
+        this.players.clear();
+        this.entities.clear();
+        synchronized (this.chunkLock) {
+            this.tickingChunks.clear();
+            this.entityTickingChunks.clear();
         }
     }
 

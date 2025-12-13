@@ -26,7 +26,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public RegionTickData createNewData(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> forRegion) {
         Objects.requireNonNull(forRegion, "forRegion");
-        final RegionTickData data = new RegionTickData();
+        final RegionTickData data = new RegionTickData(forRegion.regioniser.world);
         data.attachRegion(forRegion, this.scheduler);
         return data;
     }

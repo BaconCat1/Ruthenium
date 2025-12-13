@@ -158,25 +158,28 @@ public final class TickRegionScheduler {
         final RunningTick runningTick = this.watchdog.track(world, null, Thread.currentThread(), tickStart);
         worldData.beginTick();
         this.currentWorldData.set(worldData);
-        boolean drainedTasks = false;
-        boolean drainAbortedByBudget = false;
         boolean fallback = false;
+        final boolean hasActiveRegions = this.hasActiveRegions(world);
+        if (!hasActiveRegions) {
+            fallback = true;
+            return this.logFallback(world, FallbackReason.NO_ACTIVE_REGIONS,
+                this.buildDiagnostics(world, "pre-check", false, false,
+                    System.nanoTime() - tickStart));
+        }
+        
         try {
-            final DrainResult drainResult = drainRegionTasks(regionizer, world, shouldKeepTicking);
-            drainedTasks = drainResult.drainedAny();
-            drainAbortedByBudget = drainResult.abortedByBudget();
             if (this.halted.get()) {
                 fallback = true;
                 return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_DURING_TICK,
-                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                    this.buildDiagnostics(world, "after-drain", false, false,
                         System.nanoTime() - tickStart));
             }
-            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", drainedTasks, true);
+            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", false, true);
             worldData.populateChunkState(shouldKeepTicking);
-            if (this.hasActiveRegions(world) && !this.hasRecentRegionTicks(world)) {
+            if (hasActiveRegions && !this.hasRecentRegionTicks(world)) {
                 fallback = true;
                 return this.logFallback(world, FallbackReason.REGION_TICKS_STALLED,
-                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                    this.buildDiagnostics(world, "after-drain", false, false,
                         System.nanoTime() - tickStart));
             }
             return true;
@@ -185,7 +188,7 @@ public final class TickRegionScheduler {
             this.currentWorldData.remove();
             worldData.finishTick();
             final long duration = System.nanoTime() - tickStart;
-            this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
+            this.checkMainThreadBudget(world, duration, false, fallback);
         }
     }
 
@@ -221,49 +224,7 @@ public final class TickRegionScheduler {
         this.scheduler.notifyTasks(handle);
     }
 
-    private DrainResult drainRegionTasks(final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
-                                         final ServerWorld world,
-                                         final BooleanSupplier shouldKeepTicking) {
-        boolean drainedAny = false;
-        boolean abortedByBudget = false;
-        final BooleanSupplier drainGuard = () -> !this.halted.get();
-        boolean keepDraining = true;
-        while (keepDraining && drainGuard.getAsBoolean()) {
-            if (!shouldKeepTicking.getAsBoolean()) {
-                abortedByBudget = true;
-            }
-            keepDraining = false;
-            final boolean[] loopDrained = new boolean[1];
-            regionizer.computeForAllRegions(region -> {
-                if (!drainGuard.getAsBoolean()) {
-                    return;
-                }
-                final RegionScheduleHandle handle = region.getData().getScheduleHandle();
-                if (!handle.hasTasks()) {
-                    return;
-                }
-                final Boolean drained = handle.runTasks(drainGuard);
-                if (Boolean.TRUE.equals(drained)) {
-                    loopDrained[0] = true;
-                }
-            });
-            if (loopDrained[0]) {
-                drainedAny = true;
-                keepDraining = true;
-            }
-        }
-        if (drainedAny) {
-            if (LOGGING_OPTIONS.logDrainedTasks()) {
-                LOGGER.info("Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
-            }
-            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
-                "Drained pending region tasks on main thread for world {}", world.getRegistryKey().getValue());
-        }
-        if (abortedByBudget) {
-            this.logBudgetAbort(world, "drain-region-tasks", drainedAny, true);
-        }
-        return new DrainResult(drainedAny, abortedByBudget);
-    }
+
 
     public RegionScheduleHandle createHandle(final RegionTickData data,
                                              final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
@@ -390,11 +351,7 @@ public final class TickRegionScheduler {
                             final ServerWorld world, final RegionScheduleHandle handle) {
         this.currentRegion.set(region);
         this.currentWorld.set(world);
-        if (world instanceof RegionizedServerWorld regionized) {
-            this.currentWorldData.set(regionized.ruthenium$getWorldRegionData());
-        } else {
-            this.currentWorldData.set(null);
-        }
+        this.currentWorldData.set(handle.getData().getWorldData());
         this.currentHandle.set(handle);
     }
 
@@ -410,6 +367,10 @@ public final class TickRegionScheduler {
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
         final RegionizedWorldData worldData = getCurrentWorldData();
+
+        if (worldData != null) {
+            worldData.tickRegionServices();
+        }
 
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, guard);
@@ -777,15 +738,13 @@ public final class TickRegionScheduler {
         return nanos / 1_000_000.0D;
     }
 
-    private record DrainResult(boolean drainedAny, boolean abortedByBudget) {
-    }
-
     private enum FallbackReason {
         SCHEDULER_HALTED_BEFORE_START("Scheduler halted before running world tick", true),
         SERVER_BUDGET_EXHAUSTED_BEFORE_START("Server requested stop-ticking before scheduler start", true),
         SCHEDULER_HALTED_DURING_TICK("Scheduler halted mid-tick", true),
         SERVER_BUDGET_EXHAUSTED_DURING_TICK("Server requested stop-ticking during scheduler pump", true),
-        REGION_TICKS_STALLED("Region scheduler produced no ticks recently", true);
+        REGION_TICKS_STALLED("Region scheduler produced no ticks recently", true),
+        NO_ACTIVE_REGIONS("No active regions available to tick", true);
 
         private final String description;
         private final boolean fallbackToVanilla;

@@ -46,13 +46,14 @@ class TickRegionSchedulerTest {
     }
 
     @Test
-    void tickWorldContinuesWhenServerBudgetExhausted() {
+    void tickWorldFallsBackWhenBudgetExhaustedWithoutRegions() {
         final ServerWorld world = createStubWorld();
         this.haltedFlag.set(false);
 
         final boolean replaced = this.scheduler.tickWorld(world, () -> false);
 
-        Assertions.assertTrue(replaced, "tickWorld should continue running regions even when shouldKeepTicking is false");
+        Assertions.assertFalse(replaced,
+            "tickWorld should fall back to vanilla when no regions are active, even if the budget is exhausted");
     }
 
     private static AtomicBoolean extractHaltedFlag(final TickRegionScheduler scheduler) throws Exception {

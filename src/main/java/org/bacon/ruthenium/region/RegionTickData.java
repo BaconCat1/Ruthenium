@@ -31,16 +31,22 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
     private long redstoneTick;
     private final LongSet chunks = new LongOpenHashSet();
     private final RegionTaskQueue taskQueue = new RegionTaskQueue();
+    private final RegionizedWorldData worldData;
 
     /**
      * Creates a new region tick data instance using the global scheduler.
      */
-    public RegionTickData() {
-        this(TickRegionScheduler.getInstance());
+    public RegionTickData(final ServerWorld world) {
+        this(TickRegionScheduler.getInstance(), world);
     }
 
-    private RegionTickData(final TickRegionScheduler scheduler) {
+    private RegionTickData(final TickRegionScheduler scheduler, final ServerWorld world) {
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+        this.worldData = new RegionizedWorldData(world);
+    }
+
+    public RegionizedWorldData getWorldData() {
+        return this.worldData;
     }
 
     /**
@@ -92,6 +98,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
      * @param other the data instance to merge
      */
     public void absorb(final RegionTickData other) {
+        this.worldData.merge(other.worldData);
         this.currentTick = Math.max(this.currentTick, other.currentTick);
         this.redstoneTick = Math.max(this.redstoneTick, other.redstoneTick);
         this.chunks.addAll(other.chunks);
@@ -228,6 +235,20 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
                       final ReferenceOpenHashSet<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> regions) {
         final int sectionShift = regioniser.sectionChunkShift;
 
+        final Long2ReferenceOpenHashMap<RegionizedWorldData> regionToData = new Long2ReferenceOpenHashMap<>(into.size());
+        for (final Long2ReferenceMap.Entry<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> entry : into.long2ReferenceEntrySet()) {
+             if (entry.getValue() != null) {
+                 regionToData.put(entry.getLongKey(), entry.getValue().getData().getWorldData());
+             }
+        }
+        
+        final ReferenceOpenHashSet<RegionizedWorldData> dataSet = new ReferenceOpenHashSet<>(regions.size());
+        for (final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> region : regions) {
+            dataSet.add(region.getData().getWorldData());
+        }
+
+        this.worldData.split(sectionShift, regionToData, dataSet);
+
         final Map<Long, Set<RegionSectionPos>> sectionsByRegion = new HashMap<>();
         for (final Long2ReferenceMap.Entry<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData>> entry : into.long2ReferenceEntrySet()) {
             final long sectionKey = entry.getLongKey();
@@ -291,6 +312,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
     @Override
     public void mergeInto(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionSectionData> into) {
         final RegionTickData targetData = into.getData();
+        targetData.getWorldData().merge(this.worldData);
         targetData.currentTick = Math.max(targetData.currentTick, this.currentTick);
         targetData.redstoneTick = Math.max(targetData.redstoneTick, this.redstoneTick);
         targetData.chunks.addAll(this.chunks);
