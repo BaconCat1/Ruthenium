@@ -1,0 +1,313 @@
+accessWidener v1 named
+
+# BlockStateBase
+accessible field net/minecraft/world/level/block/state/BlockBehaviour$BlockStateBase lightBlock I
+accessible field net/minecraft/world/level/block/state/BlockBehaviour$BlockStateBase occlusionShape Lnet/minecraft/world/phys/shapes/VoxelShape;
+accessible field net/minecraft/world/level/block/state/BlockBehaviour$BlockStateBase occlusionShapesByFace [Lnet/minecraft/world/phys/shapes/VoxelShape;
+
+
+# BlockStateBase.ShapeCache
+accessible class net/minecraft/world/level/block/state/BlockBehaviour$BlockStateBase$Cache
+accessible field net/minecraft/world/level/block/state/BlockBehaviour$BlockStateBase$Cache collisionShape Lnet/minecraft/world/phys/shapes/VoxelShape;
+
+
+# LevelChunkSection
+accessible field net/minecraft/world/level/chunk/LevelChunkSection states Lnet/minecraft/world/level/chunk/PalettedContainer;
+
+
+# PalettedContainer
+accessible method net/minecraft/world/level/chunk/PalettedContainer get (I)Ljava/lang/Object;
+accessible field net/minecraft/world/level/chunk/PalettedContainer data Lnet/minecraft/world/level/chunk/PalettedContainer$Data;
+
+
+# PalettedContainer.Data
+accessible class net/minecraft/world/level/chunk/PalettedContainer$Data
+# MDG requires we AT the constructor if we AT the class
+accessible method net/minecraft/world/level/chunk/PalettedContainer$Data <init> (Lnet/minecraft/world/level/chunk/Configuration;Lnet/minecraft/util/BitStorage;Lnet/minecraft/world/level/chunk/Palette;)V
+
+
+# PaletteResize
+accessible class net/minecraft/world/level/chunk/PaletteResize
+
+
+# ChunkMap
+accessible field net/minecraft/server/level/ChunkMap level Lnet/minecraft/server/level/ServerLevel;
+accessible field net/minecraft/server/level/ChunkMap mainThreadExecutor Lnet/minecraft/util/thread/BlockableEventLoop;
+accessible method net/minecraft/server/level/ChunkMap getUpdatingChunkIfPresent (J)Lnet/minecraft/server/level/ChunkHolder;
+accessible method net/minecraft/server/level/ChunkMap getVisibleChunkIfPresent (J)Lnet/minecraft/server/level/ChunkHolder;
+accessible method net/minecraft/server/level/ChunkMap getChunkQueueLevel (J)Ljava/util/function/IntSupplier;
+accessible method net/minecraft/server/level/ChunkMap generator ()Lnet/minecraft/world/level/chunk/ChunkGenerator;
+mutable field net/minecraft/server/level/ChunkMap updatingChunkMap Lit/unimi/dsi/fastutil/longs/Long2ObjectLinkedOpenHashMap;
+mutable field net/minecraft/server/level/ChunkMap pendingUnloads Lit/unimi/dsi/fastutil/longs/Long2ObjectLinkedOpenHashMap;
+mutable field net/minecraft/server/level/ChunkMap pendingGenerationTasks Ljava/util/List;
+mutable field net/minecraft/server/level/ChunkMap unloadQueue Ljava/util/Queue;
+mutable field net/minecraft/server/level/ChunkMap worldgenTaskDispatcher Lnet/minecraft/server/level/ChunkTaskDispatcher;
+mutable field net/minecraft/server/level/ChunkMap lightTaskDispatcher Lnet/minecraft/server/level/ChunkTaskDispatcher;
+accessible method net/minecraft/server/level/ChunkMap setServerViewDistance (I)V
+accessible method net/minecraft/server/level/ChunkMap upgradeChunkTag (Lnet/minecraft/nbt/CompoundTag;)Lnet/minecraft/nbt/CompoundTag;
+accessible field net/minecraft/server/level/ChunkMap worldGenContext Lnet/minecraft/world/level/chunk/status/WorldGenContext;
+#accessible field net/minecraft/server/level/ChunkMap tickingGenerated Ljava/util/concurrent/atomic/AtomicInteger;
+#accessible field net/minecraft/server/level/ChunkMap progressListener Lnet/minecraft/server/level/progress/ChunkProgressListener;
+accessible method net/minecraft/server/level/ChunkMap playerIsCloseEnoughForSpawning (Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/level/ChunkPos;)Z
+mutable field net/minecraft/server/level/ChunkMap chunksToEagerlySave Lit/unimi/dsi/fastutil/longs/LongSet;
+mutable field net/minecraft/server/level/ChunkMap activeChunkWrites Ljava/util/concurrent/atomic/AtomicInteger;
+
+
+# ChunkLevel
+accessible field net/minecraft/server/level/ChunkLevel FULL_CHUNK_LEVEL I
+accessible field net/minecraft/server/level/ChunkLevel BLOCK_TICKING_LEVEL I
+accessible field net/minecraft/server/level/ChunkLevel ENTITY_TICKING_LEVEL I
+
+
+# LevelLightEngine
+mutable field net/minecraft/world/level/lighting/LevelLightEngine blockEngine Lnet/minecraft/world/level/lighting/LightEngine;
+mutable field net/minecraft/world/level/lighting/LevelLightEngine skyEngine Lnet/minecraft/world/level/lighting/LightEngine;
+
+
+# ThreadedLevelLightEngine
+accessible class net/minecraft/server/level/ThreadedLevelLightEngine$TaskType
+mutable field net/minecraft/server/level/ThreadedLevelLightEngine consecutiveExecutor Lnet/minecraft/util/thread/ConsecutiveExecutor;
+mutable field net/minecraft/server/level/ThreadedLevelLightEngine taskDispatcher Lnet/minecraft/server/level/ChunkTaskDispatcher;
+
+# SectionStorage
+accessible field net/minecraft/world/level/chunk/storage/SectionStorage levelHeightAccessor Lnet/minecraft/world/level/LevelHeightAccessor;
+mutable field net/minecraft/world/level/chunk/storage/SectionStorage simpleRegionStorage Lnet/minecraft/world/level/chunk/storage/SimpleRegionStorage;
+accessible method net/minecraft/world/level/chunk/storage/SectionStorage get (J)Ljava/util/Optional;
+accessible method net/minecraft/world/level/chunk/storage/SectionStorage getOrLoad (J)Ljava/util/Optional;
+accessible method net/minecraft/world/level/chunk/storage/SectionStorage tryRead (Lnet/minecraft/world/level/ChunkPos;)Ljava/util/concurrent/CompletableFuture;
+accessible method net/minecraft/world/level/chunk/storage/SectionStorage setDirty (J)V
+
+# SimpleRegionStorage
+accessible field net/minecraft/world/level/chunk/storage/SimpleRegionStorage worker Lnet/minecraft/world/level/chunk/storage/IOWorker;
+
+
+# IOWorker
+accessible field net/minecraft/world/level/chunk/storage/IOWorker storage Lnet/minecraft/world/level/chunk/storage/RegionFileStorage;
+
+
+# PoiSection
+accessible field net/minecraft/world/entity/ai/village/poi/PoiSection byType Ljava/util/Map;
+
+
+# PoiRecord
+accessible method net/minecraft/world/entity/ai/village/poi/PoiRecord acquireTicket ()Z
+accessible method net/minecraft/world/entity/ai/village/poi/PoiRecord releaseTicket ()Z
+
+
+# OffsetDoubleList
+accessible field net/minecraft/world/phys/shapes/OffsetDoubleList delegate Lit/unimi/dsi/fastutil/doubles/DoubleList;
+accessible field net/minecraft/world/phys/shapes/OffsetDoubleList offset D
+
+
+# VoxelShapeArray
+accessible method net/minecraft/world/phys/shapes/ArrayVoxelShape <init> (Lnet/minecraft/world/phys/shapes/DiscreteVoxelShape;Lit/unimi/dsi/fastutil/doubles/DoubleList;Lit/unimi/dsi/fastutil/doubles/DoubleList;Lit/unimi/dsi/fastutil/doubles/DoubleList;)V
+
+
+# VoxelShape
+accessible field net/minecraft/world/phys/shapes/VoxelShape shape Lnet/minecraft/world/phys/shapes/DiscreteVoxelShape;
+accessible method net/minecraft/world/phys/shapes/VoxelShape getCoords (Lnet/minecraft/core/Direction$Axis;)Lit/unimi/dsi/fastutil/doubles/DoubleList;
+
+
+# AABB
+accessible method net/minecraft/world/phys/AABB getDirection (Lnet/minecraft/world/phys/AABB;Lnet/minecraft/world/phys/Vec3;[DLnet/minecraft/core/Direction;DDD)Lnet/minecraft/core/Direction;
+
+
+# PersistentEntitySectionManager
+accessible class net/minecraft/world/level/entity/PersistentEntitySectionManager$Callback
+
+
+# TransientEntitySectionManager
+accessible class net/minecraft/world/level/entity/TransientEntitySectionManager$Callback
+
+
+# BitSetDiscreteVoxelShape
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape storage Ljava/util/BitSet;
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape xMin I
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape yMin I
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape zMin I
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape xMax I
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape yMax I
+accessible field net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape zMax I
+accessible method net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape join (Lnet/minecraft/world/phys/shapes/DiscreteVoxelShape;Lnet/minecraft/world/phys/shapes/DiscreteVoxelShape;Lnet/minecraft/world/phys/shapes/IndexMerger;Lnet/minecraft/world/phys/shapes/IndexMerger;Lnet/minecraft/world/phys/shapes/IndexMerger;Lnet/minecraft/world/phys/shapes/BooleanOp;)Lnet/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape;
+accessible method net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape isZStripFull (IIII)Z
+accessible method net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape isXZRectangleFull (IIIII)Z
+accessible method net/minecraft/world/phys/shapes/BitSetDiscreteVoxelShape clearZStrip (IIII)V
+
+
+# IndexMerger
+accessible class net/minecraft/world/phys/shapes/IndexMerger
+
+
+# CubeVoxelShape
+accessible method net/minecraft/world/phys/shapes/CubeVoxelShape <init> (Lnet/minecraft/world/phys/shapes/DiscreteVoxelShape;)V
+
+
+# ClipContext
+accessible field net/minecraft/world/level/ClipContext block Lnet/minecraft/world/level/ClipContext$Block;
+accessible field net/minecraft/world/level/ClipContext fluid Lnet/minecraft/world/level/ClipContext$Fluid;
+
+
+# Fluid
+accessible method net/minecraft/world/level/material/Fluid isEmpty ()Z
+accessible method net/minecraft/world/level/material/Fluid createLegacyBlock (Lnet/minecraft/world/level/material/FluidState;)Lnet/minecraft/world/level/block/state/BlockState;
+accessible method net/minecraft/world/level/material/Fluid isRandomlyTicking ()Z
+
+# We need to manually copy these down for MDG
+accessible method net/minecraft/world/level/material/EmptyFluid isEmpty ()Z
+accessible method net/minecraft/world/level/material/EmptyFluid createLegacyBlock (Lnet/minecraft/world/level/material/FluidState;)Lnet/minecraft/world/level/block/state/BlockState;
+accessible method net/minecraft/world/level/material/LavaFluid createLegacyBlock (Lnet/minecraft/world/level/material/FluidState;)Lnet/minecraft/world/level/block/state/BlockState;
+accessible method net/minecraft/world/level/material/LavaFluid isRandomlyTicking ()Z
+
+# VisibilitySet
+accessible field net/minecraft/client/renderer/chunk/VisibilitySet FACINGS I
+accessible field net/minecraft/client/renderer/chunk/VisibilitySet data Ljava/util/BitSet;
+
+
+# Level
+mutable field net/minecraft/world/level/Level blockEntityTickers Ljava/util/List;
+mutable field net/minecraft/world/level/Level pendingBlockEntityTickers Ljava/util/List;
+
+
+# PoiManager
+accessible method net/minecraft/world/entity/ai/village/poi/PoiManager setDirty (J)V
+
+
+# PlayerChunkSender
+accessible method net/minecraft/server/network/PlayerChunkSender sendChunk (Lnet/minecraft/server/network/ServerGamePacketListenerImpl;Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/level/chunk/LevelChunk;)V
+
+
+# ChunkStatusTasks
+accessible method net/minecraft/world/level/chunk/status/ChunkStatusTasks postLoadProtoChunk (Lnet/minecraft/server/level/ServerLevel;Lnet/minecraft/world/level/storage/ValueInput$ValueInputList;)V
+accessible method net/minecraft/world/level/chunk/status/ChunkStatusTasks light (Lnet/minecraft/world/level/chunk/status/WorldGenContext;Lnet/minecraft/world/level/chunk/status/ChunkStep;Lnet/minecraft/util/StaticCache2D;Lnet/minecraft/world/level/chunk/ChunkAccess;)Ljava/util/concurrent/CompletableFuture;
+
+
+# RegionFileStorage
+accessible method net/minecraft/world/level/chunk/storage/RegionFileStorage getRegionFile (Lnet/minecraft/world/level/ChunkPos;)Lnet/minecraft/world/level/chunk/storage/RegionFile;
+extendable class net/minecraft/world/level/chunk/storage/RegionFileStorage
+accessible method net/minecraft/world/level/chunk/storage/RegionFileStorage <init> (Lnet/minecraft/world/level/chunk/storage/RegionStorageInfo;Ljava/nio/file/Path;Z)V
+accessible method net/minecraft/world/level/chunk/storage/RegionFileStorage write (Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/nbt/CompoundTag;)V
+
+
+# ChunkMap.DistanceManager
+accessible class net/minecraft/server/level/ChunkMap$DistanceManager
+
+
+# DistanceManager
+mutable field net/minecraft/server/level/DistanceManager playersPerChunk Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;
+mutable field net/minecraft/server/level/DistanceManager loadingChunkTracker Lnet/minecraft/server/level/LoadingChunkTracker;
+mutable field net/minecraft/server/level/DistanceManager simulationChunkTracker Lnet/minecraft/server/level/SimulationChunkTracker;
+mutable field net/minecraft/server/level/DistanceManager playerTicketManager Lnet/minecraft/server/level/DistanceManager$PlayerTicketTracker;
+mutable field net/minecraft/server/level/DistanceManager chunksToUpdateFutures Ljava/util/Set;
+mutable field net/minecraft/server/level/DistanceManager ticketDispatcher Lnet/minecraft/server/level/ThrottlingChunkTaskDispatcher;
+mutable field net/minecraft/server/level/DistanceManager ticketsToRelease Lit/unimi/dsi/fastutil/longs/LongSet;
+mutable field net/minecraft/server/level/DistanceManager mainThreadExecutor Ljava/util/concurrent/Executor;
+mutable field net/minecraft/server/level/DistanceManager naturalSpawnChunkCounter Lnet/minecraft/server/level/DistanceManager$FixedPlayerDistanceChunkTracker;
+
+
+# DistanceManager$PlayerTicketTracker
+accessible class net/minecraft/server/level/DistanceManager$PlayerTicketTracker
+
+
+# DistanceManager$FixedPlayerDistanceChunkTracker
+accessible class net/minecraft/server/level/DistanceManager$FixedPlayerDistanceChunkTracker
+
+
+# ServerChunkCache
+accessible method net/minecraft/server/level/ServerChunkCache runDistanceManagerUpdates ()Z
+accessible field net/minecraft/server/level/ServerChunkCache level Lnet/minecraft/server/level/ServerLevel;
+accessible field net/minecraft/server/level/ServerChunkCache mainThreadProcessor Lnet/minecraft/server/level/ServerChunkCache$MainThreadExecutor;
+
+
+# ServerChunkCache$MainThreadExecutor
+accessible class net/minecraft/server/level/ServerChunkCache$MainThreadExecutor
+
+
+# ServerLevel
+mutable field net/minecraft/server/level/ServerLevel entityManager Lnet/minecraft/world/level/entity/PersistentEntitySectionManager;
+
+
+# ServerLevel$EntityCallbacks
+accessible class net/minecraft/server/level/ServerLevel$EntityCallbacks
+accessible method net/minecraft/server/level/ServerLevel$EntityCallbacks <init> (Lnet/minecraft/server/level/ServerLevel;)V
+
+
+# SimpleRegionStorage
+accessible field net/minecraft/world/level/chunk/storage/SimpleRegionStorage worker Lnet/minecraft/world/level/chunk/storage/IOWorker;
+mutable field net/minecraft/world/level/chunk/storage/SimpleRegionStorage worker Lnet/minecraft/world/level/chunk/storage/IOWorker;
+
+
+# StructureCheck
+mutable field net/minecraft/world/level/levelgen/structure/StructureCheck loadedChunks Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;
+mutable field net/minecraft/world/level/levelgen/structure/StructureCheck featureChecks Ljava/util/Map;
+
+
+# ClientLevel
+mutable field net/minecraft/client/multiplayer/ClientLevel entityStorage Lnet/minecraft/world/level/entity/TransientEntitySectionManager;
+
+
+# ClientLevel$EntityCallbacks
+accessible class net/minecraft/client/multiplayer/ClientLevel$EntityCallbacks
+accessible method net/minecraft/client/multiplayer/ClientLevel$EntityCallbacks <init> (Lnet/minecraft/client/multiplayer/ClientLevel;)V
+
+
+# StructureTemplate$Palette
+mutable field net/minecraft/world/level/levelgen/structure/templatesystem/StructureTemplate$Palette cache Ljava/util/Map;
+
+
+# GenerationChunkHolder
+mutable field net/minecraft/server/level/GenerationChunkHolder startedWork Ljava/util/concurrent/atomic/AtomicReference;
+mutable field net/minecraft/server/level/GenerationChunkHolder futures Ljava/util/concurrent/atomic/AtomicReferenceArray;
+mutable field net/minecraft/server/level/GenerationChunkHolder task Ljava/util/concurrent/atomic/AtomicReference;
+mutable field net/minecraft/server/level/GenerationChunkHolder generationRefCount Ljava/util/concurrent/atomic/AtomicInteger;
+
+
+# ChunkMap.TrackedEntity
+accessible class net/minecraft/server/level/ChunkMap$TrackedEntity
+accessible field net/minecraft/server/level/ChunkMap$TrackedEntity serverEntity Lnet/minecraft/server/level/ServerEntity;
+
+
+# LevelLoadStatusManager$Status
+#accessible class net/minecraft/client/multiplayer/LevelLoadStatusManager$Status
+
+
+# RegionFile
+accessible method net/minecraft/world/level/chunk/storage/RegionFile write (Lnet/minecraft/world/level/ChunkPos;Ljava/nio/ByteBuffer;)V
+
+
+# RegionFile$ChunkBuffer
+accessible class net/minecraft/world/level/chunk/storage/RegionFile$ChunkBuffer
+
+
+# DensityFunctions$EndIslandDensityFunction
+accessible class net/minecraft/world/level/levelgen/DensityFunctions$EndIslandDensityFunction
+
+
+# LocalMobCapCalculator$MobCounts
+accessible class net/minecraft/world/level/LocalMobCapCalculator$MobCounts
+
+
+# SectionStorage$PackedChunk
+accessible class net/minecraft/world/level/chunk/storage/SectionStorage$PackedChunk
+# MDG requires we AT the constructor if we AT the class
+accessible method net/minecraft/world/level/chunk/storage/SectionStorage$PackedChunk <init> (Lit/unimi/dsi/fastutil/ints/Int2ObjectMap;Z)V
+
+
+# Ticket
+accessible method net/minecraft/server/level/Ticket <init> (Lnet/minecraft/server/level/TicketType;IJ)V
+
+
+# LoadingChunkTracker
+accessible class net/minecraft/server/level/LoadingChunkTracker
+
+
+# TicketStorage
+mutable field net/minecraft/world/level/TicketStorage tickets Lit/unimi/dsi/fastutil/longs/Long2ObjectOpenHashMap;
+
+
+# PrepareSpawnTask
+accessible class net/minecraft/server/network/config/PrepareSpawnTask$Preparing
+
+
+accessible class net/minecraft/network/PacketProcessor$ListenerAndPacket
+# MDG requires we AT the constructor if we AT the class
+accessible method net/minecraft/network/PacketProcessor$ListenerAndPacket <init> (Lnet/minecraft/network/PacketListener;Lnet/minecraft/network/protocol/Packet;)V
