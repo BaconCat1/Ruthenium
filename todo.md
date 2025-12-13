@@ -38,6 +38,7 @@
   - [x] When tasks must cross region boundaries (entities moving, block events crossing, portal/teleport), enqueue transfers so the destination region owns the follow-up work.
   - [x] Validate every fallback path so it reports when something ran globally instead of regionally, mirroring Folia’s "no cross-region tick" guarantee.
   - [x] Fix issue involving shouldKeepTicking being completely ignored by vanilla (thanks mojang) causing fallbacks to vanilla ticks.
+
 ### 1. Complete Scheduler Lifecycle Integration
 - [x] **Reconcile scheduler with vanilla tick flow**
   - [x] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
@@ -60,7 +61,6 @@
 ### 2. Complete RegionizedWorldData - World State Decoupling
 - [x] **Finish world data holder implementation**
   - [x] Implement full entity/connection split & merge callbacks in `RegionizedWorldData`
-  - [ ] Track per-region block events queue (note blocks, comparator updates, etc.)
   - [ ] Mirror chunk tick lists (random ticks, scheduled ticks, fluid ticks)
   - [ ] Port mob spawning windows and per-region spawn caps
   - [ ] Implement nearby player tracker with chunk-distance bucketing
@@ -149,7 +149,6 @@
     - [ ] Migrate pending task queues
     - [ ] Combine entity/chunk tracking lists
     - [ ] Merge tick schedules and handle conflicts
-    - [ ] Transfer block event queues
   - [ ] Implement state splitting during region division:
     - [ ] Partition entities by new region boundaries
     - [ ] Split chunk ownership
@@ -174,23 +173,8 @@
 
 ### 8. Debugging & Diagnostics
 - [x] **Enhanced error handling and logging**
-  - [x] Comprehensive exception catching in region tick loop
-  - [x] Error tracking per region in `RegionTickMonitor`
-  - [x] Stall detection and automatic recovery attempts
-  - [x] Detailed scheduling state logging
-  - [x] Thread dump command for deadlock diagnosis
-
 - [x] **Improved tick monitoring**
-  - [x] Enhanced `/ruthenium tickreport` with status indicators (OK/SLOW/STALLED)
-  - [x] Min/max/average duration tracking per region
-  - [x] Error count and last error age tracking
-  - [x] Consecutive stall counter
-
 - [x] **Scheduler diagnostics**
-  - [x] Enhanced `/ruthenium dump` with thread pool state
-  - [x] Proactive stall detection with detailed warnings
-  - [x] Rescheduling attempt logging
-  - [x] Region lifecycle state tracking
 
 - [ ] **Remaining diagnostic improvements**
   - [ ] Add thread-specific performance counters
@@ -201,20 +185,8 @@
 
 ### 9. Testing & Validation
 - [ ] **Add comprehensive tests**
-  - [ ] Test region merge/split task queue migration
-  - [ ] Validate schedule handle reuse after region changes
-  - [ ] Test cross-region entity teleport consistency
-  - [ ] Verify thread ownership enforcement catches violations
-  - [ ] Test concurrent chunk loading in adjacent regions
-  - [ ] Validate graceful shutdown with active regions
-
 - [ ] **Integration testing**
-  - [ ] Smoke test dedicated server startup with regionizer active
-  - [ ] Test player join/leave across multiple regions
-  - [ ] Validate entity AI behavior across region boundaries
-  - [ ] Test redstone contraptions spanning multiple regions
-  - [ ] Verify chunk generation load distribution
-  - [ ] Profile memory usage under high region count
+
 
 ---
 
