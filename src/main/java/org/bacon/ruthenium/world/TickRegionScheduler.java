@@ -610,6 +610,7 @@ public final class TickRegionScheduler {
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
         final RegionizedWorldData worldData = getCurrentWorldData();
+        final RegionizedWorldData tickView = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
         final long tickStart = System.nanoTime();
 
         int processedTasks = 0;
@@ -635,6 +636,9 @@ public final class TickRegionScheduler {
             final int chunkX = CoordinateUtil.getChunkX(chunkKey);
             final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
             // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
+            if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
+                continue;
+            }
             final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
             if (worldChunk == null) {
                 skippedNotFull++;
@@ -642,20 +646,14 @@ public final class TickRegionScheduler {
             }
 
             ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
-            if (worldData != null) {
-                worldData.markEntityTickingChunk(chunkX, chunkZ);
-            }
             try {
                 ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
-                this.tickChunkEntities(world, chunkManager, chunkX, chunkZ);
+                this.tickChunkEntities(world, chunkManager, tickView, chunkX, chunkZ);
                 tickedChunks++;
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
             } finally {
                 ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
-                if (worldData != null) {
-                    worldData.unmarkEntityTickingChunk(chunkX, chunkZ);
-                }
             }
         }
         if (chunkLoopAborted) {
@@ -723,13 +721,10 @@ public final class TickRegionScheduler {
     @SuppressWarnings("unchecked")
     private void tickChunkEntities(final ServerWorld world,
                                    final ServerChunkManager chunkManager,
+                                   final RegionizedWorldData tickView,
                                    final int chunkX,
                                    final int chunkZ) {
-        final ServerChunkLoadingManager loadingManager =
-            ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
-        final ChunkLevelManager levelManager = loadingManager.getLevelManager();
-        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
-        if (!levelManager.shouldTickEntities(chunkKey)) {
+        if (!tickView.shouldTickEntitiesInChunk(chunkX, chunkZ)) {
             return;
         }
 
@@ -739,6 +734,7 @@ public final class TickRegionScheduler {
             (ServerEntityManager<Entity>)((ServerWorldAccessor)world).ruthenium$getEntityManager();
         final SectionedEntityCache<Entity> cache =
             ((ServerEntityManagerAccessor)entityManager).ruthenium$getEntitySectionCache();
+        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
 
         final int minBlockX = chunkX << 4;
         final int minBlockZ = chunkZ << 4;
@@ -750,7 +746,7 @@ public final class TickRegionScheduler {
 
         cache.getTrackingSections(chunkKey).forEach(section -> {
             section.forEach(chunkBox, entity -> {
-                this.tickRegionEntity(world, tickManager, profiler, levelManager, entity);
+                this.tickRegionEntity(world, tickManager, profiler, tickView, entity);
                 return LazyIterationConsumer.NextIteration.CONTINUE;
             });
         });
@@ -759,7 +755,7 @@ public final class TickRegionScheduler {
     private void tickRegionEntity(final ServerWorld world,
                                    final TickManager tickManager,
                                    final Profiler profiler,
-                                   final ChunkLevelManager levelManager,
+                                   final RegionizedWorldData tickView,
                                    final Entity entity) {
         if (entity == null || entity.isRemoved()) {
             return;
@@ -772,8 +768,8 @@ public final class TickRegionScheduler {
         entity.checkDespawn();
         profiler.pop();
 
-        final long entityChunkKey = entity.getChunkPos().toLong();
-        if (!(entity instanceof ServerPlayerEntity) && !levelManager.shouldTickEntities(entityChunkKey)) {
+        final ChunkPos entityChunk = entity.getChunkPos();
+        if (!(entity instanceof ServerPlayerEntity) && !tickView.shouldTickEntitiesInChunk(entityChunk.x, entityChunk.z)) {
             return;
         }
 
@@ -1466,7 +1462,8 @@ public final class TickRegionScheduler {
             }
 
             final ServerWorld world = this.getWorld();
-            final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable();
+            final long deadlineNanos = tickStart + TICK_INTERVAL_NANOS;
+            final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable() && System.nanoTime() < deadlineNanos;
             final RunningTick runningTick = this.scheduler == null ? null
                 : this.scheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
 

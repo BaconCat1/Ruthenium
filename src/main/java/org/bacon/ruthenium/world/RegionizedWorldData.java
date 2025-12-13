@@ -286,6 +286,28 @@ public class RegionizedWorldData {
     }
 
     /**
+     * Returns whether the supplied chunk should tick blocks according to the most recent
+     * orchestrator snapshot.
+     */
+    public boolean shouldTickBlocksInChunk(final int chunkX, final int chunkZ) {
+        final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        synchronized (this.chunkLock) {
+            return this.tickingChunks.contains(key);
+        }
+    }
+
+    /**
+     * Returns whether the supplied chunk should tick entities according to the most recent
+     * orchestrator snapshot.
+     */
+    public boolean shouldTickEntitiesInChunk(final int chunkX, final int chunkZ) {
+        final long key = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        synchronized (this.chunkLock) {
+            return this.entityTickingChunks.contains(key);
+        }
+    }
+
+    /**
      * Ticks pending world services that must continue to execute on the orchestrator thread to
      * keep the world responsive.
      */
@@ -475,9 +497,22 @@ public class RegionizedWorldData {
         final ServerChunkManager chunkManager = this.world.getChunkManager();
         final ServerChunkLoadingManager loadingManager = ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
 
-        chunkManager.tick(shouldKeepTicking, false);
-        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
-        ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
+        /*
+         * We cannot call ServerChunkManager.tick(..., false) and then run broadcastUpdates /
+         * tickEntityMovement afterwards: the vanilla tick ordering runs tickEntityMovement
+         * before ServerChunkLoadingManager.tick(...), and reordering can corrupt internal
+         * chunk-system queues (seen as LongLinkedOpenHashSet.removeFirstLong crashes).
+         *
+         * Instead, run the required sub-steps in vanilla order while still avoiding chunk ticking.
+         */
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
+        if (!this.world.isDebugWorld()) {
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
+            ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
+        }
+        ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();
 
         final LongOpenHashSet newTicking = new LongOpenHashSet();
         ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$forEachBlockTickingChunk(chunk -> {
@@ -748,9 +783,23 @@ public class RegionizedWorldData {
                     toRemove.add(ticker);
                     continue;
                 }
-                if (tickAllowed && this.world.shouldTickBlockPos(ticker.getPos())) {
-                    ticker.tick();
+                if (!tickAllowed) {
+                    continue;
                 }
+
+                final BlockPos pos = ticker.getPos();
+                if (pos == null) {
+                    continue;
+                }
+
+                if (this.world instanceof RegionizedServerWorld regionized) {
+                    final RegionizedWorldData tickView = regionized.ruthenium$getWorldRegionData();
+                    if (!tickView.shouldTickBlocksInChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
+                        continue;
+                    }
+                }
+
+                ticker.tick();
             }
             this.blockEntityTickers.removeAll(toRemove);
             for (final BlockEntityTickInvoker removed : toRemove) {

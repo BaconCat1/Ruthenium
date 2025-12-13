@@ -1,6 +1,7 @@
 package org.bacon.ruthenium.mixin.accessor;
 
 import java.util.function.Consumer;
+import java.util.function.BooleanSupplier;
 import net.minecraft.server.world.ChunkHolder;
 import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.world.chunk.WorldChunk;
@@ -16,6 +17,9 @@ public interface ServerChunkLoadingManagerAccessor {
 
     @Invoker("tickEntityMovement")
     void ruthenium$invokeTickEntityMovement();
+
+    @Invoker("tick")
+    void ruthenium$invokeTick(BooleanSupplier shouldKeepTicking);
 
     @Nullable
     @Invoker("getChunkHolder")
