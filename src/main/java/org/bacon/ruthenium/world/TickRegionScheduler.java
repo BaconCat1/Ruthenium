@@ -201,7 +201,15 @@ public final class TickRegionScheduler {
             }
             this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", drainedTasks, true);
             worldData.populateChunkState(shouldKeepTicking);
-            if (this.hasActiveRegions(world) && !this.hasRecentRegionTicks(world)) {
+            final boolean hasActiveRegions = this.hasActiveRegions(world);
+            if (!hasActiveRegions) {
+                // No active regions - fall back to vanilla ticking
+                fallback = true;
+                return this.logFallback(world, FallbackReason.NO_ACTIVE_REGIONS,
+                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                        System.nanoTime() - tickStart));
+            }
+            if (!this.hasRecentRegionTicks(world)) {
                 fallback = true;
                 return this.logFallback(world, FallbackReason.REGION_TICKS_STALLED,
                     this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
