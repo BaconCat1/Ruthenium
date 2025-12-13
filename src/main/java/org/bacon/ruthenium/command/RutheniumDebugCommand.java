@@ -11,6 +11,8 @@ import java.util.Map;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.config.RutheniumConfig;
+import org.bacon.ruthenium.config.RutheniumConfigManager;
 import org.bacon.ruthenium.world.RegionTickMonitor;
 import org.bacon.ruthenium.world.TickRegionScheduler;
 
@@ -30,7 +32,11 @@ public final class RutheniumDebugCommand {
             .then(literal("dump").executes(ctx -> executeSchedulerDump(ctx.getSource())))
             .then(literal("threaddump").executes(ctx -> executeThreadDump(ctx.getSource())))
             .then(literal("memorymapdump").executes(ctx -> executeMemoryDump(ctx.getSource())))
-            .then(literal("tickreport").executes(ctx -> executeTickReport(ctx.getSource())));
+            .then(literal("tickreport").executes(ctx -> executeTickReport(ctx.getSource())))
+            .then(literal("config")
+                .then(literal("path").executes(ctx -> executeConfigPath(ctx.getSource())))
+                .then(literal("reload").executes(ctx -> executeConfigReload(ctx.getSource())))
+                .then(literal("dump").executes(ctx -> executeConfigDump(ctx.getSource()))));
 
         dispatcher.register(root);
     }
@@ -96,5 +102,31 @@ public final class RutheniumDebugCommand {
 
     private static long toMiB(final long bytes) {
         return bytes <= 0L ? 0L : bytes / (1024L * 1024L);
+    }
+
+    private static int executeConfigPath(final ServerCommandSource source) {
+        source.sendFeedback(() -> Text.literal("Ruthenium config path: " + RutheniumConfigManager.getConfigPath()), false);
+        return 1;
+    }
+
+    private static int executeConfigReload(final ServerCommandSource source) {
+        final RutheniumConfig config = Ruthenium.reloadConfig();
+        source.sendFeedback(() -> Text.literal("Reloaded Ruthenium config: " + config.describe()), true);
+        return 1;
+    }
+
+    private static int executeConfigDump(final ServerCommandSource source) {
+        final RutheniumConfig config = Ruthenium.getConfig();
+        source.sendFeedback(() -> Text.literal("Ruthenium config: " + config.describe()), false);
+        source.sendFeedback(() -> Text.literal(" - scheduler.verbose=" + config.logging.schedulerVerbose
+            + " threadCount=" + config.scheduler.threadCount
+            + " maxScheduledTicksPerRegion=" + config.scheduler.maxScheduledTicksPerRegion), false);
+        source.sendFeedback(() -> Text.literal(" - scheduler.logFallbacks=" + config.logging.schedulerLogFallbacks
+            + " logFallbackStacks=" + config.logging.schedulerLogFallbackStackTraces
+            + " logRegionSummaries=" + config.logging.schedulerLogRegionSummaries
+            + " logTaskQueue=" + config.logging.schedulerLogTaskQueueProcessing), false);
+        source.sendFeedback(() -> Text.literal(" - fallbackValidator.log=" + config.fallback.logFallbacks
+            + " assert=" + config.fallback.assertMode), false);
+        return 1;
     }
 }

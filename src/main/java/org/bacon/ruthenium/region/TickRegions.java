@@ -37,7 +37,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public void onRegionCreate(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] onRegionCreate: region {} with {} sections (state={})",
                 region.id, region.getOwnedSections().size(), region.getStateForDebug());
         }
@@ -50,7 +50,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public void onRegionDestroy(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] onRegionDestroy: region {} (state={})", region.id, region.getStateForDebug());
         }
         if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
@@ -62,7 +62,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public void onRegionActive(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] onRegionActive: region {} (sections={}, chunks={}, state={})",
                 region.id, region.getOwnedSections().size(), region.getOwnedChunks().size(), region.getStateForDebug());
         }
@@ -77,7 +77,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
     @Override
     public void onRegionInactive(final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region) {
         Objects.requireNonNull(region, "region");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] onRegionInactive: region {} (state={})", region.id, region.getStateForDebug());
         }
         if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
@@ -94,7 +94,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
                          final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> into) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(into, "into");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] preMerge: region {} merging into {} (from.state={}, into.state={})",
                 from.id, into.id, from.getStateForDebug(), into.getStateForDebug());
         }
@@ -109,7 +109,7 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
                          final List<ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData>> into) {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(into, "into");
-        if (TickRegionScheduler.VERBOSE_LOGGING) {
+        if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] preSplit: region {} splitting into {} regions (state={})",
                 from.id, into.size(), from.getStateForDebug());
         }

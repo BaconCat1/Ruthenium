@@ -1049,7 +1049,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             try {
                 final boolean abortResult = abort.getAsBoolean();
                 if (this.state != STATE_READY || abortResult) {
-                    if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                    if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
                         LOGGER.info("[VERBOSE] tryMarkTicking region {} FAILED: state={} (expected READY=1), abort={}",
                             this.id, this.getStateForDebug(), abortResult);
                     }
@@ -1061,7 +1061,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 }
 
                 this.state = STATE_TICKING;
-                if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
                     LOGGER.info("[VERBOSE] tryMarkTicking region {} SUCCESS: state now={}",
                         this.id, this.getStateForDebug());
                 }
@@ -1075,7 +1075,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             this.regioniser.acquireWriteLock();
             try {
                 if (this.state != STATE_TICKING) {
-                    if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                    if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
                         LOGGER.info("[VERBOSE] markNotTicking region {} FAILED: state={} (expected TICKING=2)",
                             this.id, this.getStateForDebug());
                     }
@@ -1085,7 +1085,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 this.regioniser.onRegionRelease(this);
 
                 final boolean isReady = this.state == STATE_READY;
-                if (org.bacon.ruthenium.world.TickRegionScheduler.VERBOSE_LOGGING) {
+                if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
                     LOGGER.info("[VERBOSE] markNotTicking region {} SUCCESS: state now={}, isReady={}",
                         this.id, this.getStateForDebug(), isReady);
                 }

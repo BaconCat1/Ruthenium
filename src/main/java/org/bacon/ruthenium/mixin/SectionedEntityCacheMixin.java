@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
+
+import net.minecraft.util.annotation.Debug;
 import net.minecraft.util.function.LazyIterationConsumer;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
@@ -18,6 +20,7 @@ import net.minecraft.world.entity.EntityLike;
 import net.minecraft.world.entity.EntityTrackingSection;
 import net.minecraft.world.entity.EntityTrackingStatus;
 import net.minecraft.world.entity.SectionedEntityCache;
+import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Overwrite;
@@ -138,7 +141,7 @@ public abstract class SectionedEntityCacheMixin<T extends EntityLike> {
     }
 
     @Overwrite
-    public EntityTrackingSection<T> findTrackingSection(final long sectionPos) {
+    public @Nullable EntityTrackingSection<T> findTrackingSection(final long sectionPos) {
         synchronized (this.ruthenium$lock) {
             return this.trackingSections.get(sectionPos);
         }
@@ -161,6 +164,7 @@ public abstract class SectionedEntityCacheMixin<T extends EntityLike> {
         return positions;
     }
 
+    @Debug
     @Overwrite
     public int sectionCount() {
         synchronized (this.ruthenium$lock) {

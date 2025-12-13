@@ -29,11 +29,15 @@
 
 ### 0.5 Regionalize Every Tick Type (Folia Parity Goal)
 - [ ] Drive **all** world tick categories through the region scheduler so no vanilla chunk/entity tick paths run on the main thread unless the scheduler falls back intentionally.
-  - [x] Regionize block/entity random ticks, block entity updates, scheduled block/fluid ticks, and block event queues.
+  - [x] Regionize block/fluid random ticks via `ServerWorld.tickChunk()`.
+  - [x] Regionize scheduled block/fluid ticks (WorldTickScheduler) to region threads.
+  - [x] Regionize block entity ticking to region threads.
+  - [x] Regionize block event queues (note blocks, comparator updates, etc.) to region threads.
   - [x] Ensure entity AI, vehicle logic, and player interaction packets are processed on the owning region thread.
+  - [x] Fix off-thread chunk access needed by pathfinding/ChunkCache (`ServerChunkManager` region-thread reads).
   - [ ] When tasks must cross region boundaries (entities moving, block events crossing, portal/teleport), enqueue transfers so the destination region owns the follow-up work.
-  - [ ] Validate every fallback path so it reports when something ran globally instead of regionally, mirroring Folia’s "no cross-region tick" guarantee.
-  - [ ] Fix issue involving shouldKeepTicking being completely ignored by vanilla (thanks mojang) causing fallbacks to vanilla ticks.
+  - [x] Validate every fallback path so it reports when something ran globally instead of regionally, mirroring Folia’s "no cross-region tick" guarantee.
+  - [x] Fix issue involving shouldKeepTicking being completely ignored by vanilla (thanks mojang) causing fallbacks to vanilla ticks.
 ### 1. Complete Scheduler Lifecycle Integration
 - [x] **Reconcile scheduler with vanilla tick flow**
   - [x] Fix `ServerWorldMixin` to properly respect `TickRegionScheduler.tickWorld()` return value
@@ -62,20 +66,16 @@
   - [ ] Implement nearby player tracker with chunk-distance bucketing
   - [ ] Add region-local scheduled tick lists with merge/split migration
 
-- [x] **Decouple global world services**
-  - [x] Move weather state to per-region tracking (precipitation, thunder)
-  - [x] Regionize world time progression (handle sleeping, time skipping)
-  - [x] Split world border into per-region collision checks
-  - [x] Implement per-region day/night cycle tracking
-  - [x] Port raid manager to use regionized player tracking
-  - [ ] Handle wandering trader spawning per-region
-
-- [ ] **Replace Fabric event handlers with regionized callbacks**
-  - [ ] Remove direct `ServerChunkEvents` registration in `Ruthenium.java`
-  - [ ] Route chunk load/unload through `TickRegions` callbacks
-  - [ ] Ensure entity load/unload triggers region data updates
-  - [ ] Align player join/leave with region connection tracking
-  - [ ] Integrate block event registration with region event queues
+- [ ] **Implement Folia global tick services**
+  - [x] Tick world border on the orchestrator thread.
+  - [x] Advance weather cycle on the orchestrator thread.
+  - [x] Tick sleeping/night-skip state on the orchestrator thread.
+  - [x] Tick raids using thread-safe raid manager integration.
+  - [x] Tick time progression (game time + daylight time).
+  - [x] Update world tick snapshots (`updateTickData` / cached tick data).
+  - [ ] Drain global chunk tasks (global task queue) before region ticks.
+  - [ ] Update sky brightness on the orchestrator thread.
+  - [ ] Ensure chunk ticket updates are processed (Moonrise parity).
 
 ### 3. Eliminate Main Thread Ticking Paths
 - [ ] **Audit and block all vanilla tick entry points**
@@ -109,7 +109,9 @@
   - [x] Expose ownership checks via `RegionizedServerWorld` interface
 
 - [ ] **Enforce thread safety in critical paths**
-  - [ ] Patch `ServerChunkManager` with region thread assertions
+  - [x] Patch `ServerChunkManager` to support region-thread chunk reads (pathfinding/ChunkCache).
+  - [x] Harden vanilla collections for region-thread access (light engine queue, entity caches, chunk tracking).
+  - [ ] Patch `ServerChunkManager` with region thread assertions for unsafe mutations
   - [ ] Add ownership checks to `EntityTrackingManager` mutations
   - [ ] Validate `ServerWorld.spawnEntity()` runs on correct region thread
   - [ ] Audit entity AI/goal updates for synchronous assumptions

@@ -2,6 +2,7 @@ package org.bacon.ruthenium.mixin;
 
 import java.util.function.BooleanSupplier;
 
+import net.minecraft.block.Block;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
@@ -9,10 +10,12 @@ import net.minecraft.village.raid.Raid;
 import net.minecraft.village.raid.RaidManager;
 import net.minecraft.world.World;
 import org.bacon.ruthenium.Ruthenium;
+import org.bacon.ruthenium.debug.FallbackValidator;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
+import org.bacon.ruthenium.world.RegionTaskDispatcher;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
 import org.bacon.ruthenium.world.RegionizedServer;
 import org.bacon.ruthenium.world.TickRegionScheduler;
@@ -97,11 +100,9 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         this.ruthenium$skipVanillaChunkTick = false;
         final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
         if (replaced) {
-            // The scheduler fully replaced chunk ticking, so manually run the vanilla entity and
-            // block-entity phases without executing the rest of the world tick twice.
-            this.ruthenium$skipVanillaChunkTick = true;
-            this.ruthenium$runEntityPhase();
-            this.ruthenium$resetVanillaTickGuards();
+            // The scheduler is responsible for chunk/entity ticking on region threads.
+            // Preserve only the world-scoped entity manager maintenance tick here.
+            this.ruthenium$runEntityManagementPhase();
             ci.cancel();
             return;
         }
@@ -119,6 +120,13 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Inject(method = "tick", at = @At("TAIL"))
     private void ruthenium$finishRegionTicking(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
         this.ruthenium$resetVanillaTickGuards();
+    }
+
+    @Inject(method = "tick", at = @At(value = "INVOKE",
+        target = "Lnet/minecraft/world/tick/WorldTickScheduler;tick(JILjava/util/function/BiConsumer;)V",
+        ordinal = 0))
+    private void ruthenium$validateScheduledTicksFallback(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        FallbackValidator.validateScheduledTickProcessing(this.ruthenium$self());
     }
 
     @Inject(method = "getRaidAt", at = @At("HEAD"), cancellable = true)
@@ -169,21 +177,63 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         }
     }
 
-    @Unique
-    @SuppressWarnings("resource")
-    private void ruthenium$runEntityPhase() {
-        final ServerWorld world = this.ruthenium$self();
-        final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
-        final boolean tickAllowed = worldData.isTickAllowed();
-        if (tickAllowed) {
-            ((ServerWorldAccessor)this).ruthenium$invokeProcessSyncedBlockEvents();
+    /**
+     * Redirects addSyncedBlockEvent to use region data when on a region thread.
+     * This ensures block events are queued to the correct region.
+     */
+    @Inject(method = "addSyncedBlockEvent", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$redirectAddBlockEvent(final BlockPos pos, final Block block,
+                                                  final int eventId, final int eventParam,
+                                                  final CallbackInfo ci) {
+        if (!RegionizedServer.isOnRegionThread()) {
+            return; // Fall back to vanilla if not on region thread
         }
-        ((ServerWorldAccessor)this).ruthenium$setInBlockTick(false);
-        if (!tickAllowed) {
+
+        final int chunkX = pos.getX() >> 4;
+        final int chunkZ = pos.getZ() >> 4;
+        if (this.ruthenium$self() instanceof RegionizedServerWorld regionized &&
+            !regionized.ruthenium$isOwnedByCurrentRegion(chunkX, chunkZ)) {
+            RegionTaskDispatcher.runOnChunk(this.ruthenium$self(), chunkX, chunkZ, () -> {
+                final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+                if (worldData != null) {
+                    worldData.pushBlockEvent(pos, block, eventId, eventParam);
+                }
+            });
+            ci.cancel();
             return;
         }
 
-        world.tickBlockEntities();
+        final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+        if (worldData == null) {
+            return;
+        }
+        worldData.pushBlockEvent(pos, block, eventId, eventParam);
+        ci.cancel();
+    }
+
+    /**
+     * Redirects processSyncedBlockEvents to use region data when on a region thread.
+     * This ensures block events are processed on the correct region thread.
+     */
+    @Inject(method = "processSyncedBlockEvents", at = @At("HEAD"), cancellable = true)
+    private void ruthenium$redirectProcessBlockEvents(final CallbackInfo ci) {
+        // Validate that we're on the correct thread
+        if (!RegionizedServer.isOnRegionThread()) {
+            FallbackValidator.validateBlockEventProcessing(this.ruthenium$self());
+            return; // Fall back to vanilla if not on region thread
+        }
+
+        final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+        if (worldData != null) {
+            worldData.processBlockEvents();
+            ci.cancel();
+        }
+    }
+
+    @Unique
+    @SuppressWarnings("resource")
+    private void ruthenium$runEntityManagementPhase() {
+        final ServerWorld world = this.ruthenium$self();
         ((ServerWorldAccessor)this).ruthenium$getEntityManager().tick();
     }
 }

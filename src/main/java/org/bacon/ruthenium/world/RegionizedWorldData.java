@@ -5,13 +5,17 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ObjectLinkedOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
@@ -20,9 +24,12 @@ import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.server.world.ChunkLevelManager;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.profiler.Profilers;
 import net.minecraft.village.raid.RaidManager;
+import net.minecraft.world.World;
+import net.minecraft.world.chunk.BlockEntityTickInvoker;
 import net.minecraft.world.tick.WorldTickScheduler;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkLoadingManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
@@ -53,6 +60,16 @@ public class RegionizedWorldData {
 
     private final List<ServerPlayerEntity> players = new ArrayList<>();
     private final List<Entity> entities = new ArrayList<>();
+
+    // Block event queue (note blocks, comparator updates, etc.)
+    private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
+    private final Object blockEventsLock = new Object();
+
+    // Block entity tickers
+    private final List<BlockEntityTickInvoker> blockEntityTickers = new ArrayList<>();
+    private final List<BlockEntityTickInvoker> pendingBlockEntityTickers = new ArrayList<>();
+    private final ReferenceOpenHashSet<BlockEntityTickInvoker> blockEntityTickerSet = new ReferenceOpenHashSet<>();
+    private volatile boolean tickingBlockEntities = false;
 
     /**
      * Creates a new world data wrapper for the supplied world.
@@ -278,8 +295,9 @@ public class RegionizedWorldData {
             this.tickWorldBorder();
             this.tickWeather();
             this.tickTime();
-            this.tickScheduledTickSchedulers(); // TODO: Regionize
-            this.tickRaids(); // TODO: Regionize
+            // Scheduled ticks are now regionized - processed on region threads
+            // this.tickScheduledTickSchedulers();
+            this.tickRaids();
         }
         this.updateSleepingPlayers();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
@@ -339,6 +357,19 @@ public class RegionizedWorldData {
             this.tickingChunks.addAll(other.tickingChunks);
             this.entityTickingChunks.addAll(other.entityTickingChunks);
         }
+        // Merge block events
+        synchronized (this.blockEventsLock) {
+            synchronized (other.blockEventsLock) {
+                this.blockEvents.addAll(other.blockEvents);
+            }
+        }
+        // Merge block entity tickers
+        for (final BlockEntityTickInvoker ticker : other.blockEntityTickers) {
+            this.addBlockEntityTicker(ticker);
+        }
+        for (final BlockEntityTickInvoker ticker : other.pendingBlockEntityTickers) {
+            this.addBlockEntityTicker(ticker);
+        }
     }
 
     public void split(final int chunkToRegionShift,
@@ -390,6 +421,49 @@ public class RegionizedWorldData {
             this.tickingChunks.clear();
             this.entityTickingChunks.clear();
         }
+
+        // Split block events by position
+        synchronized (this.blockEventsLock) {
+            for (final BlockEventData blockEventData : this.blockEvents) {
+                final int chunkX = blockEventData.chunkX();
+                final int chunkZ = blockEventData.chunkZ();
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.pushBlockEvent(blockEventData);
+                }
+            }
+            this.blockEvents.clear();
+        }
+
+        // Split block entity tickers by position
+        for (final BlockEntityTickInvoker ticker : this.blockEntityTickers) {
+            final BlockPos pos = ticker.getPos();
+            if (pos != null) {
+                final int chunkX = pos.getX() >> 4;
+                final int chunkZ = pos.getZ() >> 4;
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.addBlockEntityTicker(ticker);
+                }
+            }
+        }
+        for (final BlockEntityTickInvoker ticker : this.pendingBlockEntityTickers) {
+            final BlockPos pos = ticker.getPos();
+            if (pos != null) {
+                final int chunkX = pos.getX() >> 4;
+                final int chunkZ = pos.getZ() >> 4;
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.addBlockEntityTicker(ticker);
+                }
+            }
+        }
+        this.blockEntityTickers.clear();
+        this.pendingBlockEntityTickers.clear();
+        this.blockEntityTickerSet.clear();
     }
 
     /**
@@ -491,6 +565,210 @@ public class RegionizedWorldData {
                 this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));
             }
         }
+    }
+
+    // ========== Block Event Queue Methods ==========
+
+    /**
+     * Adds a block event to this region's queue.
+     *
+     * @param blockEventData the block event to queue
+     */
+    public void pushBlockEvent(final BlockEventData blockEventData) {
+        synchronized (this.blockEventsLock) {
+            this.blockEvents.add(blockEventData);
+        }
+    }
+
+    /**
+     * Adds a block event using raw parameters.
+     *
+     * @param pos        position of the block event
+     * @param block      block type
+     * @param eventId    event ID
+     * @param eventParam event parameter
+     */
+    public void pushBlockEvent(final BlockPos pos, final Block block, final int eventId, final int eventParam) {
+        this.pushBlockEvent(new BlockEventData(pos, block, eventId, eventParam));
+    }
+
+    /**
+     * Adds multiple block events to this region's queue.
+     *
+     * @param events collection of block events to add
+     */
+    public void pushBlockEvents(final Collection<? extends BlockEventData> events) {
+        synchronized (this.blockEventsLock) {
+            for (final BlockEventData event : events) {
+                this.blockEvents.add(event);
+            }
+        }
+    }
+
+    /**
+     * Removes and returns the first block event from the queue, or null if empty.
+     *
+     * @return the first block event, or null
+     */
+    public BlockEventData removeFirstBlockEvent() {
+        synchronized (this.blockEventsLock) {
+            if (this.blockEvents.isEmpty()) {
+                return null;
+            }
+            return this.blockEvents.removeFirst();
+        }
+    }
+
+    /**
+     * Checks if there are any block events pending.
+     *
+     * @return true if the block events queue is not empty
+     */
+    public boolean hasBlockEvents() {
+        synchronized (this.blockEventsLock) {
+            return !this.blockEvents.isEmpty();
+        }
+    }
+
+    /**
+     * Returns the current size of the block events queue.
+     *
+     * @return number of pending block events
+     */
+    public int getBlockEventCount() {
+        synchronized (this.blockEventsLock) {
+            return this.blockEvents.size();
+        }
+    }
+
+    /**
+     * Processes block events for this region. This should be called from region threads.
+     * Mirrors Folia's runBlockEvents() implementation.
+     */
+    public void processBlockEvents() {
+        final List<BlockEventData> toReschedule = new ArrayList<>(64);
+
+        synchronized (this.blockEventsLock) {
+            while (!this.blockEvents.isEmpty()) {
+                final BlockEventData event = this.blockEvents.removeFirst();
+                if (this.doBlockEvent(event)) {
+                    toReschedule.add(event);
+                }
+            }
+            // Re-add events that need to be rescheduled (e.g., pistons)
+            for (final BlockEventData event : toReschedule) {
+                this.blockEvents.add(event);
+            }
+        }
+    }
+
+    /**
+     * Executes a single block event.
+     *
+     * @param event the block event to execute
+     * @return true if the event should be rescheduled
+     */
+    private boolean doBlockEvent(final BlockEventData event) {
+        final BlockState state = this.world.getBlockState(event.pos());
+        return state.isOf(event.block()) &&
+               state.onSyncedBlockEvent((World)(Object)this.world, event.pos(), event.eventId(), event.eventParam());
+    }
+
+    // ========== Block Entity Ticker Methods ==========
+
+    /**
+     * Adds a block entity ticker to this region.
+     * If we're currently ticking block entities, it goes to the pending list.
+     *
+     * @param ticker the block entity ticker to add
+     */
+    public void addBlockEntityTicker(final BlockEntityTickInvoker ticker) {
+        if (ticker == null) {
+            return;
+        }
+        if (!this.blockEntityTickerSet.add(ticker)) {
+            return;
+        }
+        if (this.tickingBlockEntities) {
+            this.pendingBlockEntityTickers.add(ticker);
+        } else {
+            this.blockEntityTickers.add(ticker);
+        }
+    }
+
+    /**
+     * Returns the list of block entity tickers for this region.
+     * Used by the region tick loop to iterate and tick block entities.
+     *
+     * @return the list of block entity tickers
+     */
+    public List<BlockEntityTickInvoker> getBlockEntityTickers() {
+        return this.blockEntityTickers;
+    }
+
+    /**
+     * Splices pending block entity tickers into the main list.
+     * Should be called after finishing block entity ticking for this tick.
+     */
+    public void splicePendingBlockEntityTickers() {
+        if (!this.pendingBlockEntityTickers.isEmpty()) {
+            this.blockEntityTickers.addAll(this.pendingBlockEntityTickers);
+            this.pendingBlockEntityTickers.clear();
+        }
+    }
+
+    /**
+     * Marks the start of block entity ticking. New tickers will go to the pending list.
+     */
+    public void setTickingBlockEntities(final boolean ticking) {
+        this.tickingBlockEntities = ticking;
+    }
+
+    /**
+     * Returns whether we're currently ticking block entities.
+     *
+     * @return true if block entity ticking is in progress
+     */
+    public boolean isTickingBlockEntities() {
+        return this.tickingBlockEntities;
+    }
+
+    /**
+     * Ticks all block entities for this region.
+     * Should be called from region threads.
+     */
+    public void tickBlockEntities() {
+        this.setTickingBlockEntities(true);
+        try {
+            final boolean tickAllowed = this.world.getTickManager().shouldTick();
+            final List<BlockEntityTickInvoker> toRemove = new ArrayList<>();
+            for (int i = 0; i < this.blockEntityTickers.size(); i++) {
+                final BlockEntityTickInvoker ticker = this.blockEntityTickers.get(i);
+                if (ticker.isRemoved()) {
+                    toRemove.add(ticker);
+                    continue;
+                }
+                if (tickAllowed && this.world.shouldTickBlockPos(ticker.getPos())) {
+                    ticker.tick();
+                }
+            }
+            this.blockEntityTickers.removeAll(toRemove);
+            for (final BlockEntityTickInvoker removed : toRemove) {
+                this.blockEntityTickerSet.remove(removed);
+            }
+        } finally {
+            this.setTickingBlockEntities(false);
+            this.splicePendingBlockEntityTickers();
+        }
+    }
+
+    /**
+     * Returns the count of block entity tickers in this region.
+     *
+     * @return number of block entity tickers
+     */
+    public int getBlockEntityTickerCount() {
+        return this.blockEntityTickers.size() + this.pendingBlockEntityTickers.size();
     }
 
     /**

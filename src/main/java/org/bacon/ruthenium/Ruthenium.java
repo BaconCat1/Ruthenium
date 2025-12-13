@@ -9,6 +9,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.command.RegionCommand;
 import org.bacon.ruthenium.command.RutheniumDebugCommand;
+import org.bacon.ruthenium.config.RutheniumConfig;
+import org.bacon.ruthenium.config.RutheniumConfigManager;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.RegionizerConfig;
@@ -27,19 +29,15 @@ public final class Ruthenium implements ModInitializer {
     public static final String MOD_ID = "ruthenium";
     private static final Logger LOGGER = LogManager.getLogger(MOD_ID);
 
-    private static final RegionizerConfig DEFAULT_CONFIG =
-        RegionizerConfig.builder()
-            .emptySectionCreationRadius(2)
-            .mergeRadius(2)
-            .recalculationSectionCount(16)
-            .maxDeadSectionPercent(0.20D)
-            .sectionChunkShift(4)
-            .build();
+    private static volatile RutheniumConfig CONFIG = RutheniumConfig.defaults().validated();
 
     @Override
     public void onInitialize() {
-        LOGGER.info("Initializing Ruthenium regionizer defaults (section shift={}, merge radius={})",
-            DEFAULT_CONFIG.getSectionChunkShift(), DEFAULT_CONFIG.getMergeRadius());
+        CONFIG = reloadConfig();
+        final RegionizerConfig regionizerDefaults = CONFIG.toRegionizerConfig();
+        LOGGER.info("Loaded Ruthenium config ({})", CONFIG.describe());
+        LOGGER.info("Regionizer defaults (section shift={}, merge radius={})",
+            regionizerDefaults.getSectionChunkShift(), regionizerDefaults.getMergeRadius());
 
         // Register commands
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
@@ -76,7 +74,8 @@ public final class Ruthenium implements ModInitializer {
      * @return a new regionizer instance
      */
     public static ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> createRegionizer(final ServerWorld world) {
-        return new ThreadedRegionizer<>(DEFAULT_CONFIG, world, createDefaultRegionCallbacks());
+        final RegionizerConfig regionizerDefaults = CONFIG.toRegionizerConfig();
+        return new ThreadedRegionizer<>(regionizerDefaults, world, createDefaultRegionCallbacks());
     }
 
     /**
@@ -86,6 +85,17 @@ public final class Ruthenium implements ModInitializer {
      */
     public static Logger getLogger() {
         return LOGGER;
+    }
+
+    public static RutheniumConfig getConfig() {
+        return CONFIG;
+    }
+
+    public static RutheniumConfig reloadConfig() {
+        final RutheniumConfig config = RutheniumConfigManager.reloadAndApply();
+        CONFIG = config;
+        TickRegionScheduler.applyConfigIfStarted(config);
+        return config;
     }
 
     /**

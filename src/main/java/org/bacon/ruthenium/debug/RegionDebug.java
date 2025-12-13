@@ -121,6 +121,17 @@ public final class RegionDebug {
         setAllInternal(on, false);
     }
 
+    public static void setEnabledCategoriesQuietly(final EnumSet<LogCategory> categories) {
+        Objects.requireNonNull(categories, "categories");
+        synchronized (ENABLED) {
+            ENABLED.clear();
+            ENABLED.addAll(categories);
+        }
+        if (!categories.contains(LogCategory.MOVEMENT)) {
+            LAST_PLAYER_REGION.clear();
+        }
+    }
+
     private static void setAllInternal(final boolean on, final boolean announce) {
         synchronized (ENABLED) {
             ENABLED.clear();
