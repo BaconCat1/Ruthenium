@@ -41,6 +41,7 @@ repositories {
         name = 'JitPack'
         url = uri('https://jitpack.io')
     }
+    mavenCentral()
 }
 
 dependencies {
@@ -52,8 +53,9 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
     // Bundle Folia's scheduler utility so the server can load region threading classes at runtime.
-    modImplementation "com.github.spottedleaf:ConcurrentUtil:0.0.7"
-    include "com.github.spottedleaf:ConcurrentUtil:0.0.7"
+    // Use JitPack to fetch the GitHub tag v0.0.7 (Tuinity/ConcurrentUtil).
+    modImplementation "com.github.Tuinity:ConcurrentUtil:v0.0.7"
+    include "com.github.Tuinity:ConcurrentUtil:v0.0.7"
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'

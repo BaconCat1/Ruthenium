@@ -1,6 +1,6 @@
 package org.bacon.ruthenium.region;
 
-import ca.spottedleaf.concurrentutil.map.concurrent.ConcurrentLong2ReferenceChainedHashTable;
+import ca.spottedleaf.concurrentutil.map.ConcurrentLong2ReferenceChainedHashTable;
 import ca.spottedleaf.concurrentutil.util.ConcurrentUtil;
 import org.bacon.ruthenium.util.CoordinateUtil;
 import org.bacon.ruthenium.util.SneakyThrow;
