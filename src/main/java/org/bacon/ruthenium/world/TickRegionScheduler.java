@@ -872,6 +872,7 @@ public final class TickRegionScheduler {
         final RegionTaskQueue queue = data.getTaskQueue();
         final ServerWorld world = region.regioniser.world;
         int processed = 0;
+        int transferred = 0;
         boolean guardStoppedTasks = false;
 
         while (true) {
@@ -884,8 +885,10 @@ public final class TickRegionScheduler {
                 break;
             }
             if (!data.containsChunk(task.chunkX(), task.chunkZ())) {
-                LOGGER.debug("Skipping chunk task for {} in region {} because the chunk is no longer present",
-                    new ChunkPos(task.chunkX(), task.chunkZ()), region.id);
+                transferred++;
+                LOGGER.debug("Transferring chunk task for {} from region {} because the chunk is no longer present",
+                    "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id);
+                RegionTaskDispatcher.runOnChunk(world, task.chunkX(), task.chunkZ(), task.runnable());
                 continue;
             }
             try {
@@ -893,7 +896,7 @@ public final class TickRegionScheduler {
                 processed++;
             } catch (final Throwable throwable) {
                 LOGGER.error("Chunk task for {} in region {} failed",
-                    new ChunkPos(task.chunkX(), task.chunkZ()), region.id, throwable);
+                    "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id, throwable);
             }
         }
         if (guardStoppedTasks) {
@@ -905,6 +908,10 @@ public final class TickRegionScheduler {
             }
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Processed {} queued chunk tasks for region {}", processed, region.id);
+        }
+        if (transferred > 0) {
+            RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
+                "Transferred {} queued chunk tasks from region {} to owning regions", transferred, region.id);
         }
         return processed;
     }

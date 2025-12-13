@@ -7,12 +7,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Supplier;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.ChunkPos;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
+import org.bacon.ruthenium.util.CoordinateUtil;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 
 /**
@@ -46,11 +46,16 @@ public final class RegionTaskDispatcher {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = regionizer.getRegionForChunk(chunkX, chunkZ);
         if (region == null) {
             queuePendingChunkTask(world, chunkX, chunkZ, task);
-            LOGGER.debug("Queued pending chunk task for {} (region not ready)", new ChunkPos(chunkX, chunkZ));
+            LOGGER.debug("Queued pending chunk task for chunk ({}, {}) (region not ready)", chunkX, chunkZ);
             return true;
         }
 
         final RegionTickData data = region.getData();
+        if (!data.containsChunk(chunkX, chunkZ)) {
+            queuePendingChunkTask(world, chunkX, chunkZ, task);
+            LOGGER.debug("Queued pending chunk task for chunk ({}, {}) (chunk not registered yet)", chunkX, chunkZ);
+            return true;
+        }
         data.getTaskQueue().queueChunkTask(chunkX, chunkZ, task);
         TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
         return true;
@@ -79,12 +84,8 @@ public final class RegionTaskDispatcher {
 
         final LongIterator iterator = region.getData().getChunks().iterator();
         final long chunkKey = iterator.hasNext() ? iterator.nextLong() : 0L;
-        final ChunkPos representative = new ChunkPos(
-            RegionTickData.decodeChunkX(chunkKey),
-            RegionTickData.decodeChunkZ(chunkKey)
-        );
         final RegionTickData data = region.getData();
-        data.getTaskQueue().queueChunkTask(representative.x, representative.z, runnable);
+        data.getTaskQueue().queueChunkTask(RegionTickData.decodeChunkX(chunkKey), RegionTickData.decodeChunkZ(chunkKey), runnable);
         TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
     }
 
@@ -99,7 +100,7 @@ public final class RegionTaskDispatcher {
                                               final int chunkX,
                                               final int chunkZ,
                                               final Runnable task) {
-        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+        final long chunkKey = CoordinateUtil.getChunkKey(chunkX, chunkZ);
         final ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>> byChunk =
             PENDING_CHUNK_TASKS.computeIfAbsent(world, ignored -> new ConcurrentHashMap<>());
         final ConcurrentLinkedQueue<Runnable> queue =
@@ -115,17 +116,22 @@ public final class RegionTaskDispatcher {
         if (byChunk == null) {
             return;
         }
-        final long chunkKey = ChunkPos.toLong(chunkX, chunkZ);
+        final long chunkKey = CoordinateUtil.getChunkKey(chunkX, chunkZ);
         final Queue<Runnable> queue = byChunk.remove(chunkKey);
         if (queue == null) {
             return;
         }
         Runnable runnable;
+        int drained = 0;
         while ((runnable = queue.poll()) != null) {
             data.getTaskQueue().queueChunkTask(chunkX, chunkZ, runnable);
+            drained++;
         }
         if (byChunk.isEmpty()) {
             PENDING_CHUNK_TASKS.remove(world, byChunk);
+        }
+        if (drained > 0) {
+            TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
         }
     }
 }

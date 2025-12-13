@@ -9,6 +9,7 @@
     "ServerChunkManagerMixin",
     "ServerWorldMixin",
     "WorldMixin",
+    "EntityTeleportMixin",
     "EntityNavigationMixin",
     "PendingUpdateQueueMixin",
     "EntityTrackingSectionMixin",
