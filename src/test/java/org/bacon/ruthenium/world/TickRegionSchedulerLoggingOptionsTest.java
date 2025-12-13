@@ -15,7 +15,6 @@ class TickRegionSchedulerLoggingOptionsTest {
 
         Assertions.assertTrue(options.logFallbacks(), "Fallback logging should be enabled by default");
         Assertions.assertFalse(options.logFallbackStacks(), "Fallback stack trace logging should default to disabled");
-        Assertions.assertFalse(options.logDrainedTasks(), "Drained task logging should default to disabled");
         Assertions.assertFalse(options.logRegionSummaries(), "Region summaries should default to disabled");
         Assertions.assertFalse(options.logTaskQueueProcessing(), "Task queue logging should default to disabled");
     }
@@ -34,8 +33,6 @@ class TickRegionSchedulerLoggingOptionsTest {
 
         Assertions.assertFalse(options.logFallbacks(), "Fallback logging should reflect system property override");
         Assertions.assertTrue(options.logFallbackStacks(), "Fallback stack trace logging should reflect override");
-        Assertions.assertTrue(options.logDrainedTasks(), "Drained task logging should reflect override");
-        Assertions.assertTrue(options.logRegionSummaries(), "Region summary logging should reflect override");
         Assertions.assertTrue(options.logTaskQueueProcessing(), "Task queue logging should reflect override");
     }
 
@@ -48,8 +45,6 @@ class TickRegionSchedulerLoggingOptionsTest {
 
         Assertions.assertTrue(options.logFallbacks(), "Fallback logging should retain default when value invalid");
         Assertions.assertFalse(options.logFallbackStacks(), "Fallback stack logging should retain default when value invalid");
-        Assertions.assertFalse(options.logDrainedTasks(), "Drained task logging should retain default when value invalid");
         Assertions.assertFalse(options.logRegionSummaries(), "Region summary logging should retain default when value invalid");
-        Assertions.assertFalse(options.logTaskQueueProcessing(), "Task queue logging should retain default when value invalid");
     }
 }

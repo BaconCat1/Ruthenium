@@ -216,69 +216,106 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         }
     }
 
-    public int computeForRegions(final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ,
-                                  final Consumer<Set<ThreadedRegion<R, S>>> consumer) {
-        final int shift = this.sectionChunkShift;
-        final int fromSectionX = fromChunkX >> shift;
-        final int fromSectionZ = fromChunkZ >> shift;
-        final int toSectionX = toChunkX >> shift;
-        final int toSectionZ = toChunkZ >> shift;
-        this.acquireWriteLock();
-        try {
-            final ReferenceOpenHashSet<ThreadedRegion<R, S>> set = new ReferenceOpenHashSet<>();
+    /**
+     * Quickly checks whether there are any regions with non-empty chunk ownership.
+     * This method uses an optimistic read approach to avoid acquiring the read lock,
+     * reducing contention on the scheduler hot path.
+     *
+     * @return {@code true} if at least one region has chunks
+     */
+    public boolean hasAnyActiveRegions() {
+        // Try optimistic read first - this is very fast when there's no contention
+        final long stamp = this.regionLock.tryOptimisticRead();
 
-            for (int currZ = fromSectionZ; currZ <= toSectionZ; ++currZ) {
-                for (int currX = fromSectionX; currX <= toSectionX; ++currX) {
-                    final ThreadedRegionSection<R, S> section = this.sections.get(CoordinateUtil.getChunkKey(currX, currZ));
-                    if (section != null) {
-                        set.add(section.getRegionPlain());
-                    }
+        // Quick iteration without locking - the concurrent hash table is thread-safe for reads
+        for (final var entry : this.regionsById) {
+            final ThreadedRegion<R, S> region = entry.getValue();
+            // Check if region has any chunks using the fast check
+            if (region.hasAnyChunks()) {
+                // Validate before returning - if concurrent modification happened, fall back
+                if (this.regionLock.validate(stamp)) {
+                    return true;
+                }
+                // Optimistic read failed, do a proper locked check
+                return hasAnyActiveRegionsLocked();
+            }
+        }
+
+        // Validate the optimistic read
+        if (this.regionLock.validate(stamp)) {
+            return false;
+        }
+
+        // Optimistic read failed, fall back to locked version
+        return hasAnyActiveRegionsLocked();
+    }
+
+    private boolean hasAnyActiveRegionsLocked() {
+        this.regionLock.readLock();
+        try {
+            for (final var entry : this.regionsById) {
+                final ThreadedRegion<R, S> region = entry.getValue();
+                if (region.hasAnyChunks()) {
+                    return true;
                 }
             }
-
-            consumer.accept(set);
-
-            return set.size();
+            return false;
         } finally {
-            this.releaseWriteLock();
+            this.regionLock.tryUnlockRead();
         }
     }
 
-    public ThreadedRegion<R, S> getRegionAtUnsynchronised(final int chunkX, final int chunkZ) {
-        final int sectionX = chunkX >> this.sectionChunkShift;
-        final int sectionZ = chunkZ >> this.sectionChunkShift;
-    final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
-
-        final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
-
-        return section == null ? null : section.getRegion();
-    }
-
+    /**
+     * Returns the region at the specified chunk coordinates using synchronised access.
+     * Uses an optimistic read first to reduce contention, falling back to a full read lock
+     * if the optimistic read is invalidated.
+     *
+     * @param chunkX the chunk X coordinate
+     * @param chunkZ the chunk Z coordinate
+     * @return the region containing the specified chunk, or null if none exists
+     */
     public ThreadedRegion<R, S> getRegionAtSynchronised(final int chunkX, final int chunkZ) {
         final int sectionX = chunkX >> this.sectionChunkShift;
         final int sectionZ = chunkZ >> this.sectionChunkShift;
-    final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+        final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
 
-        // try an optimistic read
-        {
-            final long readAttempt = this.regionLock.tryOptimisticRead();
-            final ThreadedRegionSection<R, S> optimisticSection = this.sections.get(sectionKey);
-            final ThreadedRegion<R, S> optimisticRet =
-                optimisticSection == null ? null : optimisticSection.getRegionPlain();
-            if (this.regionLock.validate(readAttempt)) {
+        // Try optimistic read first to reduce lock contention
+        final long stamp = this.regionLock.tryOptimisticRead();
+        if (stamp != 0L) {
+            final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
+            final ThreadedRegion<R, S> optimisticRet = section == null ? null : section.getRegionPlain();
+
+            if (this.regionLock.validate(stamp)) {
                 return optimisticRet;
             }
         }
 
-        // failed, fall back to acquiring the lock
+        // Failed optimistic read, fall back to acquiring the lock
         this.regionLock.readLock();
         try {
             final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
-
             return section == null ? null : section.getRegionPlain();
         } finally {
             this.regionLock.tryUnlockRead();
         }
+    }
+
+    /**
+     * Returns the region at the specified chunk coordinates without synchronisation.
+     * This method should only be called when the caller already holds appropriate locks
+     * or when the result does not need to be consistent.
+     *
+     * @param chunkX the chunk X coordinate
+     * @param chunkZ the chunk Z coordinate
+     * @return the region containing the specified chunk, or null if none exists
+     */
+    public ThreadedRegion<R, S> getRegionAtUnsynchronised(final int chunkX, final int chunkZ) {
+        final int sectionX = chunkX >> this.sectionChunkShift;
+        final int sectionZ = chunkZ >> this.sectionChunkShift;
+        final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+
+        final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
+        return section == null ? null : section.getRegionPlain();
     }
 
     public ThreadedRegion<R, S> getRegionForChunk(final int chunkX, final int chunkZ) {
@@ -779,8 +816,25 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             }
         }
 
+        /**
+         * Fast check to determine if this region contains any chunks.
+         * This method does not allocate and is safe to call from hot paths.
+         * Should be called while holding the regionizer read lock.
+         *
+         * @return true if the region has at least one chunk
+         */
+        public boolean hasAnyChunks() {
+            for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
+                if (!section.isEmpty()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         public Long getCenterSection() {
             final LongArrayList sections = this.getOwnedSections();
+
 
             final LongComparator comparator = (final long k1, final long k2) -> {
                 final int x1 = CoordinateUtil.getChunkX(k1);

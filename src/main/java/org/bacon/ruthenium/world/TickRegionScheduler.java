@@ -23,8 +23,10 @@ import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.server.world.ServerEntityManager;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.function.LazyIterationConsumer;
 import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.profiler.Profilers;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.GameRules;
 import net.minecraft.world.chunk.Chunk;
@@ -42,6 +44,7 @@ import org.bacon.ruthenium.region.RegionTaskQueue;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.region.ThreadedRegionizer.ThreadedRegion;
+import org.bacon.ruthenium.util.CoordinateUtil;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
 import org.bacon.ruthenium.world.RegionWatchdog.Event;
 import org.bacon.ruthenium.world.RegionWatchdog.RunningTick;
@@ -125,7 +128,12 @@ public final class TickRegionScheduler {
         );
         this.watchdog.start();
         this.scheduler.start();
-        LOGGER.info("TickRegionScheduler started with {} tick threads", targetThreads);
+        LOGGER.info("==================================================");
+        LOGGER.info("RUTHENIUM REGION SCHEDULER STARTED");
+        LOGGER.info("  Parallel tick threads: {}", targetThreads);
+        LOGGER.info("  CPU cores detected: {}", processorCount);
+        LOGGER.info("  Verbose logging: {}", VERBOSE_LOGGING);
+        LOGGER.info("==================================================");
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, "Scheduler started with {} tick threads", targetThreads);
     }
 
@@ -170,49 +178,43 @@ public final class TickRegionScheduler {
                 LOGGER.info("[VERBOSE] tickWorld HALTED - scheduler halted before start");
             }
             return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_BEFORE_START,
-                this.buildDiagnostics(world, "pre-check", false, false,
+                this.buildDiagnostics(world, "pre-check",
                     System.nanoTime() - invocationStart));
         }
 
         final BooleanSupplier orchestratorGuard = this.composeOrchestratorBudget(shouldKeepTicking, invocationStart);
-        this.logBudgetAbortIfExceeded(world, orchestratorGuard, "pre-check", false, false);
+        this.logBudgetAbortIfExceeded(world, orchestratorGuard, "pre-check");
 
-        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
         final RegionizedWorldData worldData = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
         final long tickStart = System.nanoTime();
         final RunningTick runningTick = this.watchdog.track(world, null, Thread.currentThread(), tickStart);
         worldData.beginTick();
         this.currentWorldData.set(worldData);
         boolean fallback = false;
-        boolean drainedTasks = false;
-        boolean drainAbortedByBudget = false;
         try {
-            final DrainResult drainResult = drainRegionTasks(regionizer, world, shouldKeepTicking);
-            drainedTasks = drainResult.drainedAny();
-            drainAbortedByBudget = drainResult.abortedByBudget();
             if (this.halted.get()) {
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] tickWorld HALTED - scheduler halted during tick");
                 }
                 fallback = true;
                 return this.logFallback(world, FallbackReason.SCHEDULER_HALTED_DURING_TICK,
-                    this.buildDiagnostics(world, "after-drain", false, false,
+                    this.buildDiagnostics(world, "after-drain",
                         System.nanoTime() - tickStart));
             }
-            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain", drainedTasks, true);
+            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain");
             worldData.populateChunkState(shouldKeepTicking);
             final boolean hasActiveRegions = this.hasActiveRegions(world);
             if (!hasActiveRegions) {
                 // No active regions - fall back to vanilla ticking
                 fallback = true;
                 return this.logFallback(world, FallbackReason.NO_ACTIVE_REGIONS,
-                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                    this.buildDiagnostics(world, "after-drain",
                         System.nanoTime() - tickStart));
             }
             if (!this.hasRecentRegionTicks(world)) {
                 fallback = true;
                 return this.logFallback(world, FallbackReason.REGION_TICKS_STALLED,
-                    this.buildDiagnostics(world, "after-drain", drainedTasks, drainAbortedByBudget,
+                    this.buildDiagnostics(world, "after-drain",
                         System.nanoTime() - tickStart));
             }
             return true;
@@ -221,7 +223,7 @@ public final class TickRegionScheduler {
             this.currentWorldData.remove();
             worldData.finishTick();
             final long duration = System.nanoTime() - tickStart;
-            this.checkMainThreadBudget(world, duration, drainedTasks, fallback);
+            this.checkMainThreadBudget(world, duration, fallback);
         }
     }
 
@@ -364,21 +366,12 @@ public final class TickRegionScheduler {
 
     public boolean hasActiveRegions(final ServerWorld world) {
         final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = requireRegionizer(world);
-        final boolean[] active = new boolean[1];
-        final AtomicInteger totalRegions = new AtomicInteger();
-        final AtomicInteger activeCount = new AtomicInteger();
-        regionizer.computeForAllRegions(region -> {
-            totalRegions.incrementAndGet();
-            if (!region.getData().getChunks().isEmpty()) {
-                active[0] = true;
-                activeCount.incrementAndGet();
-            }
-        });
+        // Use optimized hasAnyActiveRegions() which uses optimistic locking to reduce contention
+        final boolean active = regionizer.hasAnyActiveRegions();
         if (VERBOSE_LOGGING) {
-            LOGGER.info("[VERBOSE] hasActiveRegions: totalRegions={}, regionsWithChunks={}, result={} for {}",
-                totalRegions.get(), activeCount.get(), active[0], describeWorld(world));
+            LOGGER.info("[VERBOSE] hasActiveRegions: result={} for {}", active, describeWorld(world));
         }
-        return active[0];
+        return active;
     }
 
     @SuppressWarnings("deprecation")
@@ -404,7 +397,8 @@ public final class TickRegionScheduler {
             final RegionTickData data = region.getData();
 
             // Skip regions with no chunks - they have nothing to tick
-            if (data.getChunks().isEmpty()) {
+            // Use hasAnyChunks() for efficient check without building a list
+            if (!region.hasAnyChunks()) {
                 skippedNoChunks.incrementAndGet();
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} skipped - no chunks (state={})",
@@ -441,7 +435,7 @@ public final class TickRegionScheduler {
             if ("TICKING".equals(stateStr)) {
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - currently TICKING (chunks={})",
-                        region.id, data.getChunks().size());
+                        region.id, region.getOwnedChunks().size());
                 }
                 recent[0] = true;
                 return;
@@ -457,14 +451,14 @@ public final class TickRegionScheduler {
                     if (VERBOSE_LOGGING) {
                         final long untilScheduledMs = TimeUnit.NANOSECONDS.toMillis(scheduledStart - now);
                         LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - never ticked but scheduled in {}ms (state={}, chunks={})",
-                            region.id, untilScheduledMs, region.getStateForDebug(), data.getChunks().size());
+                            region.id, untilScheduledMs, region.getStateForDebug(), region.getOwnedChunks().size());
                     }
                     recent[0] = true;
                 } else {
                     stalledRegions.add(region.id);
                     if (VERBOSE_LOGGING) {
                         LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - never ticked, no future schedule (state={}, scheduledStart={}, chunks={})",
-                            region.id, region.getStateForDebug(), scheduledStart, data.getChunks().size());
+                            region.id, region.getStateForDebug(), scheduledStart, region.getOwnedChunks().size());
                     }
                 }
             } else if (now - lastTickStart > REGION_TICK_STALL_NANOS) {
@@ -473,10 +467,10 @@ public final class TickRegionScheduler {
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - last tick {}ms ago (state={}, scheduledStart={}, chunks={})",
                         region.id, ageMillis, region.getStateForDebug(),
-                        scheduledStart, data.getChunks().size());
+                        scheduledStart, region.getOwnedChunks().size());
                 }
                 LOGGER.warn("Region {} in {} has not ticked for {}ms (chunks={}, scheduledStart={}, isMarkedNonSchedulable={})",
-                    region.id, describeWorld(world), ageMillis, data.getChunks().size(),
+                    region.id, describeWorld(world), ageMillis, region.getOwnedChunks().size(),
                     scheduledStart, handle.isMarkedNonSchedulable());
             } else if (!handle.hasScheduledDeadline()) {
                 stalledRegions.add(region.id);
@@ -485,14 +479,14 @@ public final class TickRegionScheduler {
                         region.id, region.getStateForDebug(), lastTickStart);
                 }
                 LOGGER.warn("Region {} in {} lost its scheduled deadline (lastStart={}, chunks={})",
-                    region.id, describeWorld(world), lastTickStart, data.getChunks().size());
+                    region.id, describeWorld(world), lastTickStart, region.getOwnedChunks().size());
                 handle.prepareForActivation();
                 this.scheduler.notifyTasks(handle);
             } else {
                 if (VERBOSE_LOGGING) {
                     final long ageMillis = TimeUnit.NANOSECONDS.toMillis(now - lastTickStart);
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - last tick {}ms ago (state={}, chunks={})",
-                        region.id, ageMillis, region.getStateForDebug(), data.getChunks().size());
+                        region.id, ageMillis, region.getStateForDebug(), region.getOwnedChunks().size());
                 }
                 recent[0] = true;
             }
@@ -518,20 +512,17 @@ public final class TickRegionScheduler {
     }
 
     public void logBudgetAbort(final ServerWorld world, final String stage) {
-        this.logBudgetAbort(world, stage, false, false);
-    }
-
-    public void logBudgetAbort(final ServerWorld world,
-                               final String stage,
-                               final boolean drainedTasks,
-                               final boolean abortedDrain) {
         if (world instanceof RegionizedServerWorld regionized) {
             final RegionizedWorldData worldData = regionized.ruthenium$getWorldRegionData();
             if (!worldData.shouldLogBudgetWarning(stage)) {
                 return;
             }
         }
-        final FallbackDiagnostics diagnostics = this.buildDiagnostics(world, stage, drainedTasks, abortedDrain, -1L);
+        // Don't log budget exhaustion for dimensions with no active regions - that's expected
+        if (!this.hasActiveRegions(world)) {
+            return;
+        }
+        final FallbackDiagnostics diagnostics = this.buildDiagnostics(world, stage, -1L);
         this.logFallbackMessage("Main-thread budget exhausted while orchestrating {} for {} ({})",
             stage, describeWorld(world), diagnostics.describe());
     }
@@ -587,9 +578,11 @@ public final class TickRegionScheduler {
         final ServerChunkManager chunkManager = world.getChunkManager();
 
         int tickedChunks = 0;
-        int skippedNotContained = 0;
         int skippedNotFull = 0;
-        final long[] chunkSnapshot = data.getChunks().toLongArray();
+        // Use region.getOwnedChunks() which tracks chunks at the regionizer section level,
+        // ensuring we tick all chunks that belong to this region even if RegionTickData
+        // hasn't been synchronized yet
+        final long[] chunkSnapshot = region.getOwnedChunks().toLongArray();
         boolean chunkLoopAborted = false;
         for (int i = 0; i < chunkSnapshot.length; ++i) {
             if (!guard.getAsBoolean()) {
@@ -597,14 +590,11 @@ public final class TickRegionScheduler {
                 break;
             }
             final long chunkKey = chunkSnapshot[i];
-            final int chunkX = RegionTickData.decodeChunkX(chunkKey);
-            final int chunkZ = RegionTickData.decodeChunkZ(chunkKey);
-            if (!data.containsChunk(chunkX, chunkZ)) {
-                skippedNotContained++;
-                continue;
-            }
-            final Chunk chunk = chunkManager.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-            if (!(chunk instanceof WorldChunk worldChunk)) {
+            final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+            final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+            // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
+            final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
+            if (worldChunk == null) {
                 skippedNotFull++;
                 continue;
             }
@@ -634,10 +624,19 @@ public final class TickRegionScheduler {
         data.advanceCurrentTick();
         data.advanceRedstoneTick();
         final long lagCompTick = worldData == null ? -1L : worldData.getLagCompensationTick();
+        final long tickDuration = System.nanoTime() - tickStart;
+        final double tickMs = tickDuration / 1_000_000.0;
+
+        // Only log region ticks when verbose logging is enabled to avoid I/O contention
+        if (VERBOSE_LOGGING && tickedChunks > 0) {
+            final String threadName = Thread.currentThread().getName();
+            LOGGER.info("[REGION TICK] Region {} ticked {} chunks in {}ms on thread '{}' (world={})",
+                region.id, tickedChunks, String.format("%.2f", tickMs), threadName, world.getRegistryKey().getValue());
+        }
 
         if (VERBOSE_LOGGING) {
-            LOGGER.info("[VERBOSE] tickRegion END region {}: total={}, ticked={}, skippedNotContained={}, skippedNotFull={}, tasks={}, aborted={}",
-                region.id, chunkSnapshot.length, tickedChunks, skippedNotContained, skippedNotFull, processedTasks, chunkLoopAborted);
+            LOGGER.info("[VERBOSE] tickRegion END region {}: total={}, ticked={}, skippedNotFull={}, tasks={}, aborted={}, thread={}",
+                region.id, chunkSnapshot.length, tickedChunks, skippedNotFull, processedTasks, chunkLoopAborted, Thread.currentThread().getName());
         }
 
         if (LOGGING_OPTIONS.logRegionSummaries()) {
@@ -672,11 +671,19 @@ public final class TickRegionScheduler {
         final SectionedEntityCache<Entity> cache =
             ((ServerEntityManagerAccessor)entityManager).ruthenium$getEntitySectionCache();
 
+        final int minBlockX = chunkX << 4;
+        final int minBlockZ = chunkZ << 4;
+        final int maxY = world.getTopYInclusive() + 1;
+        final Box chunkBox = new Box(
+            minBlockX, world.getBottomY(), minBlockZ,
+            minBlockX + 16, maxY, minBlockZ + 16
+        );
+
         cache.getTrackingSections(chunkKey).forEach(section -> {
-            final List<Entity> entities = section.stream().collect(Collectors.toList());
-            for (final Entity entity : entities) {
+            section.forEach(chunkBox, entity -> {
                 this.tickRegionEntity(world, tickManager, profiler, levelManager, entity);
-            }
+                return LazyIterationConsumer.NextIteration.CONTINUE;
+            });
         });
     }
 
@@ -821,18 +828,25 @@ public final class TickRegionScheduler {
                                 final FallbackDiagnostics diagnostics) {
         final String detail = diagnostics == null ? "stage=unknown" : diagnostics.describe();
         final String action = reason.fallbackToVanilla() ? "Scheduler fallback" : "Scheduler skip";
-        this.logFallbackMessage("{}: reason={} (world={}, {})",
-            action, reason.description(), describeWorld(world), detail);
+
+        // NO_ACTIVE_REGIONS is expected for empty dimensions (no players there) - log at DEBUG level
+        if (reason == FallbackReason.NO_ACTIVE_REGIONS) {
+            if (VERBOSE_LOGGING) {
+                LOGGER.debug("{}: reason={} (world={}, {})",
+                    action, reason.description(), describeWorld(world), detail);
+            }
+        } else {
+            this.logFallbackMessage("{}: reason={} (world={}, {})",
+                action, reason.description(), describeWorld(world), detail);
+        }
         return !reason.fallbackToVanilla();
     }
 
     private void logBudgetAbortIfExceeded(final ServerWorld world,
                                           final BooleanSupplier shouldKeepTicking,
-                                          final String stage,
-                                          final boolean drainedTasks,
-                                          final boolean abortedDrain) {
+                                          final String stage) {
         if (!shouldKeepTicking.getAsBoolean()) {
-            this.logBudgetAbort(world, stage, drainedTasks, abortedDrain);
+            this.logBudgetAbort(world, stage);
         }
     }
 
@@ -856,8 +870,6 @@ public final class TickRegionScheduler {
 
     private FallbackDiagnostics buildDiagnostics(final ServerWorld world,
                                                  final String stage,
-                                                 final boolean drainedTasks,
-                                                 final boolean abortedDrain,
                                                  final long elapsedNanos) {
         RegionizedWorldData worldData = null;
         boolean handlingTick = false;
@@ -867,7 +879,7 @@ public final class TickRegionScheduler {
             handlingTick = worldData.isHandlingTick();
             activeRegions = this.hasActiveRegions(world);
         }
-        return new FallbackDiagnostics(stage, drainedTasks, handlingTick, activeRegions, abortedDrain, elapsedNanos);
+        return new FallbackDiagnostics(stage, handlingTick, activeRegions, elapsedNanos);
     }
 
     private void handleWatchdogWarning(final Event event) {
@@ -931,23 +943,23 @@ public final class TickRegionScheduler {
     }
 
     private void checkMainThreadBudget(final ServerWorld world, final long durationNanos,
-                                       final boolean drainedTasks, final boolean fallback) {
+                                       final boolean fallback) {
         if (MAIN_THREAD_CRASH_NANOS > 0L && durationNanos >= MAIN_THREAD_CRASH_NANOS) {
             this.handleMainThreadTimeout(world, durationNanos);
             return;
         }
 
         if (MAIN_THREAD_WARN_NANOS > 0L && durationNanos >= MAIN_THREAD_WARN_NANOS) {
-            this.handleMainThreadWarning(world, durationNanos, drainedTasks, fallback);
+            this.handleMainThreadWarning(world, durationNanos, fallback);
         }
     }
 
     private void handleMainThreadWarning(final ServerWorld world, final long durationNanos,
-                                         final boolean drainedTasks, final boolean fallback) {
+                                         final boolean fallback) {
         final double millis = nanosToMillis(durationNanos);
         final String message = String.format(Locale.ROOT,
-            "Main thread spent %.2f ms orchestrating region ticks for world %s (tasksDrained=%s, fallback=%s)",
-            millis, world.getRegistryKey().getValue(), drainedTasks, fallback);
+            "Main thread spent %.2f ms orchestrating region ticks for world %s (fallback=%s)",
+            millis, world.getRegistryKey().getValue(), fallback);
         LOGGER.warn(message);
         RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message);
         if (LOGGER.isDebugEnabled()) {
@@ -977,9 +989,7 @@ public final class TickRegionScheduler {
 
     private enum FallbackReason {
         SCHEDULER_HALTED_BEFORE_START("Scheduler halted before running world tick", true),
-        SERVER_BUDGET_EXHAUSTED_BEFORE_START("Server requested stop-ticking before scheduler start", true),
         SCHEDULER_HALTED_DURING_TICK("Scheduler halted mid-tick", true),
-        SERVER_BUDGET_EXHAUSTED_DURING_TICK("Server requested stop-ticking during scheduler pump", true),
         REGION_TICKS_STALLED("Region scheduler produced no ticks recently", true),
         NO_ACTIVE_REGIONS("No active regions available to tick", true);
 
@@ -1000,55 +1010,10 @@ public final class TickRegionScheduler {
         }
     }
 
-    /**
-     * Result of draining region tasks from the main thread.
-     */
-    private record DrainResult(boolean drainedAny, boolean abortedByBudget) {}
-
-    /**
-     * Drains pending region tasks from all regions in the given world.
-     * This is called from the main thread during world tick orchestration.
-     */
-    private DrainResult drainRegionTasks(
-            final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
-            final ServerWorld world,
-            final BooleanSupplier shouldKeepTicking) {
-        final boolean[] drained = {false};
-        final boolean[] aborted = {false};
-
-        regionizer.computeForAllRegions(region -> {
-            if (!shouldKeepTicking.getAsBoolean()) {
-                aborted[0] = true;
-                return;
-            }
-            final RegionTickData data = region.getData();
-            final RegionTaskQueue queue = data.getTaskQueue();
-            while (shouldKeepTicking.getAsBoolean()) {
-                final RegionTaskQueue.RegionChunkTask task = queue.pollChunkTask();
-                if (task == null) {
-                    break;
-                }
-                drained[0] = true;
-                try {
-                    task.runnable().run();
-                } catch (final Throwable throwable) {
-                    LOGGER.error("Failed to drain task for chunk ({}, {}) in region {}",
-                        task.chunkX(), task.chunkZ(), region.id, throwable);
-                }
-            }
-            if (!shouldKeepTicking.getAsBoolean()) {
-                aborted[0] = true;
-            }
-        });
-
-        return new DrainResult(drained[0], aborted[0]);
-    }
 
     private record FallbackDiagnostics(String stage,
-                                       boolean drainedTasks,
                                        boolean handlingTick,
                                        boolean activeRegions,
-                                       boolean abortedDrain,
                                        long elapsedNanos) {
 
         String describe() {
@@ -1059,8 +1024,8 @@ public final class TickRegionScheduler {
                 elapsed = "n/a";
             }
             return String.format(Locale.ROOT,
-                "stage=%s, drainedTasks=%s, handlingTick=%s, activeRegions=%s, abortedDrain=%s, elapsedMillis=%s",
-                this.stage, this.drainedTasks, this.handlingTick, this.activeRegions, this.abortedDrain, elapsed);
+                "stage=%s, handlingTick=%s, activeRegions=%s, elapsedMillis=%s",
+                this.stage, this.handlingTick, this.activeRegions, elapsed);
         }
     }
 
@@ -1162,7 +1127,7 @@ public final class TickRegionScheduler {
             regionized.ruthenium$getRegionizer();
         regionizer.computeForAllRegions(region -> {
             final RegionTickData data = region.getData();
-            final int chunkCount = data.getChunks().size();
+            final int chunkCount = region.getOwnedChunks().size();
             final int pendingTasks = data.getTaskQueue().size();
             final RegionTickStats stats = data.getTickStats();
             final double lastTickMs = stats == null ? 0.0D : stats.getLastTickNanos() / 1_000_000.0D;
@@ -1333,7 +1298,7 @@ public final class TickRegionScheduler {
             if (VERBOSE_LOGGING) {
                 LOGGER.info("[VERBOSE] runTick START region {} (state={}, nonSchedulable={}, chunks={})",
                     this.region.id, this.region.getStateForDebug(), this.isMarkedNonSchedulable(),
-                    this.data.getChunks().size());
+                    this.region.getOwnedChunks().size());
             }
 
             if (this.isMarkedNonSchedulable()) {
@@ -1382,7 +1347,7 @@ public final class TickRegionScheduler {
 
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick start region {} (world={}, chunks={})", this.region.id,
-                world.getRegistryKey().getValue(), this.data.getChunks().size());
+                world.getRegistryKey().getValue(), this.region.getOwnedChunks().size());
 
             this.scheduler.enterRegionContext(this.region, world, this);
             boolean success = false;
@@ -1509,10 +1474,10 @@ public final class TickRegionScheduler {
             if (!willReschedule) {
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] runTick region {} END - will NOT reschedule! (readyForNext={}, nonSchedulable={}, state={}, chunks={})",
-                        this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getStateForDebug(), this.data.getChunks().size());
+                        this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getStateForDebug(), this.region.getOwnedChunks().size());
                 }
                 LOGGER.error("Region {} will NOT be rescheduled! (readyForNext={}, nonSchedulable={}, chunks={})",
-                    this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.data.getChunks().size());
+                    this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getOwnedChunks().size());
             } else {
                 if (VERBOSE_LOGGING) {
                     LOGGER.info("[VERBOSE] runTick region {} END - will reschedule (state={}, nextStart={}, tickCount={})",
@@ -1609,24 +1574,20 @@ public final class TickRegionScheduler {
 
         private static final String LOG_FALLBACK = "ruthenium.scheduler.logFallback";
         private static final String LOG_FALLBACK_STACKS = "ruthenium.scheduler.logFallbackStackTraces";
-        private static final String LOG_DRAINED_TASKS = "ruthenium.scheduler.logDrainedTasks";
         private static final String LOG_REGION_SUMMARIES = "ruthenium.scheduler.logRegionSummaries";
         private static final String LOG_TASK_QUEUE = "ruthenium.scheduler.logTaskQueueProcessing";
 
         private final boolean logFallbacks;
         private final boolean logFallbackStacks;
-        private final boolean logDrainedTasks;
         private final boolean logRegionSummaries;
         private final boolean logTaskQueueProcessing;
 
         private LoggingOptions(final boolean logFallbacks,
                                 final boolean logFallbackStacks,
-                                final boolean logDrainedTasks,
                                 final boolean logRegionSummaries,
                                 final boolean logTaskQueueProcessing) {
             this.logFallbacks = logFallbacks;
             this.logFallbackStacks = logFallbackStacks;
-            this.logDrainedTasks = logDrainedTasks;
             this.logRegionSummaries = logRegionSummaries;
             this.logTaskQueueProcessing = logTaskQueueProcessing;
         }
@@ -1635,10 +1596,9 @@ public final class TickRegionScheduler {
             Objects.requireNonNull(valueProvider, "propertyProvider");
             final boolean fallback = loadBoolean(valueProvider, LOG_FALLBACK, true);
             final boolean fallbackStacks = loadBoolean(valueProvider, LOG_FALLBACK_STACKS, false);
-            final boolean drained = loadBoolean(valueProvider, LOG_DRAINED_TASKS, false);
             final boolean summaries = loadBoolean(valueProvider, LOG_REGION_SUMMARIES, false);
             final boolean taskQueue = loadBoolean(valueProvider, LOG_TASK_QUEUE, false);
-            return new LoggingOptions(fallback, fallbackStacks, drained, summaries, taskQueue);
+            return new LoggingOptions(fallback, fallbackStacks, summaries, taskQueue);
         }
 
         boolean logFallbacks() {
@@ -1649,9 +1609,6 @@ public final class TickRegionScheduler {
             return this.logFallbackStacks;
         }
 
-        boolean logDrainedTasks() {
-            return this.logDrainedTasks;
-        }
 
         boolean logRegionSummaries() {
             return this.logRegionSummaries;
