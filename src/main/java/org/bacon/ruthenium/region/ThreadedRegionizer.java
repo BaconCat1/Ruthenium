@@ -1,6 +1,6 @@
 package org.bacon.ruthenium.region;
 
-import ca.spottedleaf.concurrentutil.map.SWMRLong2ObjectHashTable;
+import ca.spottedleaf.concurrentutil.map.concurrent.ConcurrentLong2ReferenceChainedHashTable;
 import ca.spottedleaf.concurrentutil.util.ConcurrentUtil;
 import org.bacon.ruthenium.util.CoordinateUtil;
 import org.bacon.ruthenium.util.SneakyThrow;
@@ -38,8 +38,8 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     public final double maxDeadRegionPercent;
     public final ServerWorld world;
 
-    private final SWMRLong2ObjectHashTable<ThreadedRegionSection<R, S>> sections = new SWMRLong2ObjectHashTable<>();
-    private final SWMRLong2ObjectHashTable<ThreadedRegion<R, S>> regionsById = new SWMRLong2ObjectHashTable<>();
+    private final ConcurrentLong2ReferenceChainedHashTable<ThreadedRegionSection<R, S>> sections = new ConcurrentLong2ReferenceChainedHashTable<>();
+    private final ConcurrentLong2ReferenceChainedHashTable<ThreadedRegion<R, S>> regionsById = new ConcurrentLong2ReferenceChainedHashTable<>();
     private final RegionCallbacks<R, S> callbacks;
     private final StampedLock regionLock = new StampedLock();
     private Thread writeLockOwner;
@@ -202,14 +202,18 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     public void computeForAllRegions(final Consumer<? super ThreadedRegion<R, S>> consumer) {
         this.regionLock.readLock();
         try {
-            this.regionsById.forEachValue(consumer);
+            for (final var entry : this.regionsById) {
+                consumer.accept(entry.getValue());
+            }
         } finally {
             this.regionLock.tryUnlockRead();
         }
     }
 
     public void computeForAllRegionsUnsynchronised(final Consumer<? super ThreadedRegion<R, S>> consumer) {
-        this.regionsById.forEachValue(consumer);
+        for (final var entry : this.regionsById) {
+            consumer.accept(entry.getValue());
+        }
     }
 
     public int computeForRegions(final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ,
