@@ -112,7 +112,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
      * @return the copy
      */
     public RegionTickData copy() {
-        final RegionTickData copy = new RegionTickData(this.scheduler);
+        final RegionTickData copy = new RegionTickData(this.scheduler, this.worldData.getWorld());
         copy.currentTick = this.currentTick;
         copy.redstoneTick = this.redstoneTick;
         copy.chunks.addAll(this.chunks);

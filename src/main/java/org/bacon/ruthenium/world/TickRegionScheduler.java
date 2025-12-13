@@ -184,6 +184,8 @@ public final class TickRegionScheduler {
         worldData.beginTick();
         this.currentWorldData.set(worldData);
         boolean fallback = false;
+        boolean drainedTasks = false;
+        boolean drainAbortedByBudget = false;
         try {
             final DrainResult drainResult = drainRegionTasks(regionizer, world, shouldKeepTicking);
             drainedTasks = drainResult.drainedAny();
@@ -567,6 +569,7 @@ public final class TickRegionScheduler {
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
         final RegionizedWorldData worldData = getCurrentWorldData();
+        final long tickStart = System.nanoTime();
 
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, guard);
@@ -987,6 +990,50 @@ public final class TickRegionScheduler {
         public boolean fallbackToVanilla() {
             return this.fallbackToVanilla;
         }
+    }
+
+    /**
+     * Result of draining region tasks from the main thread.
+     */
+    private record DrainResult(boolean drainedAny, boolean abortedByBudget) {}
+
+    /**
+     * Drains pending region tasks from all regions in the given world.
+     * This is called from the main thread during world tick orchestration.
+     */
+    private DrainResult drainRegionTasks(
+            final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer,
+            final ServerWorld world,
+            final BooleanSupplier shouldKeepTicking) {
+        final boolean[] drained = {false};
+        final boolean[] aborted = {false};
+
+        regionizer.computeForAllRegions(region -> {
+            if (!shouldKeepTicking.getAsBoolean()) {
+                aborted[0] = true;
+                return;
+            }
+            final RegionTickData data = region.getData();
+            final RegionTaskQueue queue = data.getTaskQueue();
+            while (shouldKeepTicking.getAsBoolean()) {
+                final RegionTaskQueue.RegionChunkTask task = queue.pollChunkTask();
+                if (task == null) {
+                    break;
+                }
+                drained[0] = true;
+                try {
+                    task.runnable().run();
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to drain task for chunk ({}, {}) in region {}",
+                        task.chunkX(), task.chunkZ(), region.id, throwable);
+                }
+            }
+            if (!shouldKeepTicking.getAsBoolean()) {
+                aborted[0] = true;
+            }
+        });
+
+        return new DrainResult(drained[0], aborted[0]);
     }
 
     private record FallbackDiagnostics(String stage,
