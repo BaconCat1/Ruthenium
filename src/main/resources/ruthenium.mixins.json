@@ -6,8 +6,13 @@
   "refmap": "ruthenium-refmap.json",
   "mixins": [
     "MinecraftServerMixin",
+    "ServerChunkManagerMixin",
     "ServerWorldMixin",
     "EntityNavigationMixin",
+    "PendingUpdateQueueMixin",
+    "EntityTrackingSectionMixin",
+    "SectionedEntityCacheMixin",
+    "WorldTickSchedulerMixin",
     "ServerPlayNetworkHandlerMixin",
     "accessor.ServerWorldAccessor",
     "accessor.ServerChunkManagerAccessor",
