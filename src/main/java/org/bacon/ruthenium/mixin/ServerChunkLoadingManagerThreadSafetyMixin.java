@@ -68,5 +68,24 @@ public abstract class ServerChunkLoadingManagerThreadSafetyMixin {
             return map.get(key);
         }
     }
-}
 
+    @Redirect(
+        method = {"forEachEntityTrackedBy", "hasTrackingPlayer"},
+        at = @At(value = "INVOKE", target = "Ljava/util/Set;contains(Ljava/lang/Object;)Z")
+    )
+    private boolean ruthenium$lockEntityTrackerListenersContains(final java.util.Set<?> set, final Object value) {
+        synchronized (set) {
+            return set.contains(value);
+        }
+    }
+
+    @Redirect(
+        method = {"hasTrackingPlayer"},
+        at = @At(value = "INVOKE", target = "Ljava/util/Set;isEmpty()Z")
+    )
+    private boolean ruthenium$lockEntityTrackerListenersIsEmpty(final java.util.Set<?> set) {
+        synchronized (set) {
+            return set.isEmpty();
+        }
+    }
+}

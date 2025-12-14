@@ -10,16 +10,17 @@ import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BooleanSupplier;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.fluid.Fluid;
+import net.minecraft.network.packet.s2c.play.BlockEventS2CPacket;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerChunkLoadingManager;
@@ -82,6 +83,12 @@ public class RegionizedWorldData {
      */
     private final ReentrantReadWriteLock chunkAccessLock = new ReentrantReadWriteLock();
     private static final long CHUNK_LOCK_TIMEOUT_MILLIS = 50L;
+
+    /**
+     * Counter for active region threads currently ticking chunks.
+     * Used to ensure chunk system operations wait for all region threads to complete.
+     */
+    private final AtomicInteger activeRegionThreads = new AtomicInteger(0);
 
     /**
      * Creates a new world data wrapper for the supplied world.
@@ -363,6 +370,7 @@ public class RegionizedWorldData {
      * Multiple region threads can hold the read lock simultaneously for parallel ticking.
      */
     public void acquireChunkReadLock() {
+        this.activeRegionThreads.incrementAndGet();
         this.chunkAccessLock.readLock().lock();
     }
 
@@ -371,6 +379,7 @@ public class RegionizedWorldData {
      */
     public void releaseChunkReadLock() {
         this.chunkAccessLock.readLock().unlock();
+        this.activeRegionThreads.decrementAndGet();
     }
 
     /**
@@ -402,6 +411,31 @@ public class RegionizedWorldData {
      */
     public boolean isChunkWriteLockHeld() {
         return this.chunkAccessLock.isWriteLockedByCurrentThread();
+    }
+
+    /**
+     * Waits for all active region threads to complete their chunk ticking operations.
+     * Should be called before performing operations that require exclusive access to chunk system state.
+     *
+     * @param timeoutMillis maximum time to wait in milliseconds
+     * @return {@code true} if all threads completed, {@code false} if timeout was reached
+     */
+    public boolean waitForActiveRegionThreads(final long timeoutMillis) {
+        final long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (this.activeRegionThreads.get() > 0) {
+            if (System.currentTimeMillis() >= deadline) {
+                LOGGER.warn("Timeout waiting for {} active region threads to complete in world {}",
+                    this.activeRegionThreads.get(), this.world.getRegistryKey().getValue());
+                return false;
+            }
+            try {
+                Thread.sleep(1L);
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
     }
 
     private void tickConnections() {
@@ -452,9 +486,21 @@ public class RegionizedWorldData {
         }
     }
 
+    /**
+     * Splits this region data into multiple regions. This method is called while holding
+     * critical locks and must not block or access world state.
+     *
+     * IMPORTANT: The caller MUST ensure all region threads have completed their current tick
+     * before calling this method to prevent concurrent modification of internal chunk system queues.
+     *
+     * @param chunkToRegionShift shift to convert chunk coordinates to region section coordinates
+     * @param regionToData map of region section keys to target region data
+     * @param dataSet set of all regions being split into
+     */
     public void split(final int chunkToRegionShift,
                       final Long2ReferenceOpenHashMap<RegionizedWorldData> regionToData,
                       final ReferenceOpenHashSet<RegionizedWorldData> dataSet) {
+        // Distribute players to new regions
         for (final ServerPlayerEntity player : this.players) {
             final ChunkPos pos = player.getChunkPos();
             final long regionKey = CoordinateUtil.getChunkKey(pos.x >> chunkToRegionShift, pos.z >> chunkToRegionShift);
@@ -463,6 +509,8 @@ public class RegionizedWorldData {
                 target.addPlayer(player);
             }
         }
+
+        // Distribute entities to new regions
         for (final Entity entity : this.entities) {
             final ChunkPos pos = entity.getChunkPos();
             final long regionKey = CoordinateUtil.getChunkKey(pos.x >> chunkToRegionShift, pos.z >> chunkToRegionShift);
@@ -471,7 +519,10 @@ public class RegionizedWorldData {
                 target.addEntity(entity);
             }
         }
+
+        // Distribute chunks - must be done under lock to prevent concurrent modification
         synchronized (this.chunkLock) {
+            // Distribute ticking chunks
             final LongIterator iterator = this.tickingChunks.iterator();
             while (iterator.hasNext()) {
                 final long chunkKey = iterator.nextLong();
@@ -483,6 +534,8 @@ public class RegionizedWorldData {
                     target.addChunk(chunkX, chunkZ);
                 }
             }
+
+            // Distribute entity ticking chunks
             final LongIterator entityIterator = this.entityTickingChunks.iterator();
             while (entityIterator.hasNext()) {
                 final long chunkKey = entityIterator.nextLong();
@@ -494,15 +547,17 @@ public class RegionizedWorldData {
                     target.markEntityTickingChunk(chunkX, chunkZ);
                 }
             }
-        }
-        this.players.clear();
-        this.entities.clear();
-        synchronized (this.chunkLock) {
+
+            // Clear source data
             this.tickingChunks.clear();
             this.entityTickingChunks.clear();
         }
 
-        // Split block events by position
+        // Clear player and entity lists
+        this.players.clear();
+        this.entities.clear();
+
+        // Distribute block events by position
         synchronized (this.blockEventsLock) {
             for (final BlockEventData blockEventData : this.blockEvents) {
                 final int chunkX = blockEventData.chunkX();
@@ -516,34 +571,38 @@ public class RegionizedWorldData {
             this.blockEvents.clear();
         }
 
-        // Split block entity tickers by position
-        for (final BlockEntityTickInvoker ticker : this.blockEntityTickers) {
-            final BlockPos pos = ticker.getPos();
-            if (pos != null) {
-                final int chunkX = pos.getX() >> 4;
-                final int chunkZ = pos.getZ() >> 4;
-                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
-                final RegionizedWorldData target = regionToData.get(regionKey);
-                if (target != null) {
-                    target.addBlockEntityTicker(ticker);
+        // Distribute block entity tickers by position
+        synchronized (this.blockEntityTickerSet) {
+            for (final BlockEntityTickInvoker ticker : this.blockEntityTickers) {
+                final BlockPos pos = ticker.getPos();
+                if (pos != null) {
+                    final int chunkX = pos.getX() >> 4;
+                    final int chunkZ = pos.getZ() >> 4;
+                    final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                    final RegionizedWorldData target = regionToData.get(regionKey);
+                    if (target != null) {
+                        target.addBlockEntityTicker(ticker);
+                    }
                 }
             }
-        }
-        for (final BlockEntityTickInvoker ticker : this.pendingBlockEntityTickers) {
-            final BlockPos pos = ticker.getPos();
-            if (pos != null) {
-                final int chunkX = pos.getX() >> 4;
-                final int chunkZ = pos.getZ() >> 4;
-                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
-                final RegionizedWorldData target = regionToData.get(regionKey);
-                if (target != null) {
-                    target.addBlockEntityTicker(ticker);
+
+            for (final BlockEntityTickInvoker ticker : this.pendingBlockEntityTickers) {
+                final BlockPos pos = ticker.getPos();
+                if (pos != null) {
+                    final int chunkX = pos.getX() >> 4;
+                    final int chunkZ = pos.getZ() >> 4;
+                    final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                    final RegionizedWorldData target = regionToData.get(regionKey);
+                    if (target != null) {
+                        target.addBlockEntityTicker(ticker);
+                    }
                 }
             }
+
+            this.blockEntityTickers.clear();
+            this.pendingBlockEntityTickers.clear();
+            this.blockEntityTickerSet.clear();
         }
-        this.blockEntityTickers.clear();
-        this.pendingBlockEntityTickers.clear();
-        this.blockEntityTickerSet.clear();
     }
 
     /**
@@ -757,11 +816,15 @@ public class RegionizedWorldData {
         synchronized (this.blockEventsLock) {
             while (!this.blockEvents.isEmpty()) {
                 final BlockEventData event = this.blockEvents.removeFirst();
-                if (this.doBlockEvent(event)) {
+                if (this.shouldTickBlocksInChunk(event.chunkX(), event.chunkZ())) {
+                    if (this.doBlockEvent(event)) {
+                        this.world.getServer().getPlayerManager().sendToAround(null, event.pos().getX(), event.pos().getY(), event.pos().getZ(), 64.0, this.world.getRegistryKey(), new BlockEventS2CPacket(event.pos(), event.block(), event.eventId(), event.eventParam()));
+                    }
+                } else {
                     toReschedule.add(event);
                 }
             }
-            // Re-add events that need to be rescheduled (e.g., pistons)
+            // Re-add events that need to be rescheduled
             for (final BlockEventData event : toReschedule) {
                 this.blockEvents.add(event);
             }
