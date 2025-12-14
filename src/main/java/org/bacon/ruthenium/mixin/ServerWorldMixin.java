@@ -99,22 +99,21 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         RegionDebug.onWorldTick(world);
         this.ruthenium$skipVanillaChunkTick = false;
         final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
-        if (replaced) {
+        final boolean regionsActive = !scheduler.isHalted() && scheduler.hasActiveRegions(world);
+        if (replaced || regionsActive) {
             // The scheduler is responsible for chunk/entity ticking on region threads.
-            // Preserve only the world-scoped entity manager maintenance tick here.
+            // Preserve only the world-scoped entity manager maintenance tick here and skip vanilla.
             this.ruthenium$runEntityManagementPhase();
+            if (!replaced && regionsActive) {
+                scheduler.logSchedulerConflict(world,
+                    "Blocking vanilla tick because regions remain active");
+            }
             ci.cancel();
             return;
         }
 
-        // Scheduler fallbacks should allow vanilla ticking to proceed so the world keeps
-        // advancing even when region threads are stalled. Still log whenever active regions
-        // exist to surface the degraded state for operators.
+        // Scheduler fallbacks should allow vanilla ticking to proceed only when no regions are active.
         this.ruthenium$skipVanillaChunkTick = false;
-        if (!scheduler.isHalted() && scheduler.hasActiveRegions(world)) {
-            scheduler.logSchedulerConflict(world,
-                "Scheduler fell back to vanilla tick while regions remain active");
-        }
     }
 
     @Inject(method = "tick", at = @At("TAIL"))

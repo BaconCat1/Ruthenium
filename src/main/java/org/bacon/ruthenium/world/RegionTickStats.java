@@ -216,6 +216,9 @@ public final class RegionTickStats {
 
         public static final Snapshot EMPTY = new Snapshot(0, 0.0D, 0L, 0L, 0L);
 
+        private static final double NANOS_PER_SECOND = 1_000_000_000.0D;
+        private static final double TARGET_MSPT = 50.0D;
+
         public double averageTickMillis() {
             return this.averageTickNanos / 1_000_000.0D;
         }
@@ -230,6 +233,38 @@ public final class RegionTickStats {
 
         public double maxTickMillis() {
             return this.maxTickNanos / 1_000_000.0D;
+        }
+
+        /**
+         * Calculates the effective TPS based on average tick time.
+         * TPS is capped at 20 (50ms per tick target).
+         *
+         * @return TPS value, capped at 20
+         */
+        public double getTPS() {
+            if (this.sampleCount == 0 || this.averageTickNanos <= 0) {
+                return 20.0D; // No data, assume full speed
+            }
+            final double ticksPerSecond = NANOS_PER_SECOND / this.averageTickNanos;
+            return Math.min(20.0D, ticksPerSecond);
+        }
+
+        /**
+         * Calculates the MSPT (milliseconds per tick).
+         *
+         * @return average MSPT
+         */
+        public double getMSPT() {
+            return this.averageTickMillis();
+        }
+
+        /**
+         * Returns whether the region is lagging (MSPT > 50).
+         *
+         * @return true if lagging
+         */
+        public boolean isLagging() {
+            return this.averageTickMillis() > TARGET_MSPT;
         }
     }
 }

@@ -1,20 +1,20 @@
-package org.bacon.ruthenium.region;
+package io.papermc.paper.threadedregions;
 
-import ca.spottedleaf.concurrentutil.map.ConcurrentLong2ReferenceChainedHashTable;
+import ca.spottedleaf.concurrentutil.map.SWMRLong2ObjectHashTable;
 import ca.spottedleaf.concurrentutil.util.ConcurrentUtil;
-import org.bacon.ruthenium.util.CoordinateUtil;
-import org.bacon.ruthenium.util.SneakyThrow;
-import org.apache.logging.log4j.LogManager;
+import ca.spottedleaf.moonrise.common.util.CoordinateUtils;
+import com.destroystokyo.paper.util.SneakyThrow;
+import com.mojang.logging.LogUtils;
 import it.unimi.dsi.fastutil.longs.Long2ReferenceOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongComparator;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.math.ChunkPos;
-import org.apache.logging.log4j.Logger;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ChunkPos;
+import org.slf4j.Logger;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,7 +28,7 @@ import java.util.function.Consumer;
 
 public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegionData<R, S>, S extends ThreadedRegionizer.ThreadedRegionSectionData> {
 
-    private static final Logger LOGGER = LogManager.getLogger(ThreadedRegionizer.class);
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     public final int regionSectionChunkSize;
     public final int sectionChunkShift;
@@ -36,10 +36,10 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     public final int emptySectionCreateRadius;
     public final int regionSectionMergeRadius;
     public final double maxDeadRegionPercent;
-    public final ServerWorld world;
+    public final ServerLevel world;
 
-    private final ConcurrentLong2ReferenceChainedHashTable<ThreadedRegionSection<R, S>> sections = new ConcurrentLong2ReferenceChainedHashTable<>();
-    private final ConcurrentLong2ReferenceChainedHashTable<ThreadedRegion<R, S>> regionsById = new ConcurrentLong2ReferenceChainedHashTable<>();
+    private final SWMRLong2ObjectHashTable<ThreadedRegionSection<R, S>> sections = new SWMRLong2ObjectHashTable<>();
+    private final SWMRLong2ObjectHashTable<ThreadedRegion<R, S>> regionsById = new SWMRLong2ObjectHashTable<>();
     private final RegionCallbacks<R, S> callbacks;
     private final StampedLock regionLock = new StampedLock();
     private Thread writeLockOwner;
@@ -55,7 +55,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
     public ThreadedRegionizer(final int minSectionRecalcCount, final double maxDeadRegionPercent,
                               final int emptySectionCreateRadius, final int regionSectionMergeRadius,
-                              final int regionSectionChunkShift, final ServerWorld world,
+                              final int regionSectionChunkShift, final ServerLevel world,
                               final RegionCallbacks<R, S> callbacks) {
         if (emptySectionCreateRadius <= 0) {
             throw new IllegalStateException("Region section create radius must be > 0");
@@ -72,19 +72,6 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         this.world = world;
         this.callbacks = callbacks;
         //this.loadTestData();
-    }
-
-    public ThreadedRegionizer(final RegionizerConfig config, final ServerWorld world,
-                              final RegionCallbacks<R, S> callbacks) {
-        this(
-            config.getRecalculationSectionCount(),
-            config.getMaxDeadSectionPercent(),
-            config.getEmptySectionCreationRadius(),
-            config.getMergeRadius(),
-            config.getSectionChunkShift(),
-            world,
-            callbacks
-        );
     }
 
     /*
@@ -128,12 +115,12 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                         break;
                     }
                     case "mark_ticking": {
-                        this.sections.get(CoordinateUtil.getChunkKey(op.chunkX, op.chunkZ)).region.tryMarkTicking();
+                        this.sections.get(CoordinateUtils.getChunkKey(op.chunkX, op.chunkZ)).region.tryMarkTicking();
                         break;
                     }
                     case "rel_region": {
-                        if (this.sections.get(CoordinateUtil.getChunkKey(op.chunkX, op.chunkZ)).region.state == ThreadedRegion.STATE_TICKING) {
-                            this.sections.get(CoordinateUtil.getChunkKey(op.chunkX, op.chunkZ)).region.markNotTicking();
+                        if (this.sections.get(CoordinateUtils.getChunkKey(op.chunkX, op.chunkZ)).region.state == ThreadedRegion.STATE_TICKING) {
+                            this.sections.get(CoordinateUtils.getChunkKey(op.chunkX, op.chunkZ)).region.markNotTicking();
                         }
                         break;
                     }
@@ -187,110 +174,94 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     }
 
     public long getSectionKey(final BlockPos pos) {
-    return CoordinateUtil.getChunkKey((pos.getX() >> 4) >> this.sectionChunkShift, (pos.getZ() >> 4) >> this.sectionChunkShift);
+        return CoordinateUtils.getChunkKey((pos.getX() >> 4) >> this.sectionChunkShift, (pos.getZ() >> 4) >> this.sectionChunkShift);
     }
 
     public long getSectionKey(final ChunkPos pos) {
-    return CoordinateUtil.getChunkKey(pos.x >> this.sectionChunkShift, pos.z >> this.sectionChunkShift);
+        return CoordinateUtils.getChunkKey(pos.x >> this.sectionChunkShift, pos.z >> this.sectionChunkShift);
     }
 
     public long getSectionKey(final Entity entity) {
-        final ChunkPos pos = entity.getChunkPos();
-        return CoordinateUtil.getChunkKey(pos.x >> this.sectionChunkShift, pos.z >> this.sectionChunkShift);
+        final ChunkPos pos = entity.chunkPosition();
+        return CoordinateUtils.getChunkKey(pos.x >> this.sectionChunkShift, pos.z >> this.sectionChunkShift);
     }
 
     public void computeForAllRegions(final Consumer<? super ThreadedRegion<R, S>> consumer) {
         this.regionLock.readLock();
         try {
-            for (final var entry : this.regionsById) {
-                consumer.accept(entry.getValue());
-            }
+            this.regionsById.forEachValue(consumer);
         } finally {
             this.regionLock.tryUnlockRead();
         }
     }
 
     public void computeForAllRegionsUnsynchronised(final Consumer<? super ThreadedRegion<R, S>> consumer) {
-        for (final var entry : this.regionsById) {
-            consumer.accept(entry.getValue());
-        }
+        this.regionsById.forEachValue(consumer);
     }
 
-    /**
-     * Safely checks whether any region currently owns chunks.
-     *
-     * @return {@code true} if at least one region contains chunk data
-     */
-    public boolean hasAnyActiveRegions() {
-        this.regionLock.readLock();
+    public int computeForRegions(final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ,
+                                  final Consumer<Set<ThreadedRegion<R, S>>> consumer) {
+        final int shift = this.sectionChunkShift;
+        final int fromSectionX = fromChunkX >> shift;
+        final int fromSectionZ = fromChunkZ >> shift;
+        final int toSectionX = toChunkX >> shift;
+        final int toSectionZ = toChunkZ >> shift;
+        this.acquireWriteLock();
         try {
-            for (final var entry : this.regionsById) {
-                final ThreadedRegion<R, S> region = entry.getValue();
-                if (region.hasAnyChunks()) {
-                    return true;
+            final ReferenceOpenHashSet<ThreadedRegion<R, S>> set = new ReferenceOpenHashSet<>();
+
+            for (int currZ = fromSectionZ; currZ <= toSectionZ; ++currZ) {
+                for (int currX = fromSectionX; currX <= toSectionX; ++currX) {
+                    final ThreadedRegionSection<R, S> section = this.sections.get(CoordinateUtils.getChunkKey(currX, currZ));
+                    if (section != null) {
+                        set.add(section.getRegionPlain());
+                    }
                 }
             }
-            return false;
+
+            consumer.accept(set);
+
+            return set.size();
         } finally {
-            this.regionLock.tryUnlockRead();
+            this.releaseWriteLock();
         }
     }
 
-    /**
-     * Returns the region at the specified chunk coordinates using synchronised access.
-     * Uses an optimistic read first to reduce contention, falling back to a full read lock
-     * if the optimistic read is invalidated.
-     *
-     * @param chunkX the chunk X coordinate
-     * @param chunkZ the chunk Z coordinate
-     * @return the region containing the specified chunk, or null if none exists
-     */
+    public ThreadedRegion<R, S> getRegionAtUnsynchronised(final int chunkX, final int chunkZ) {
+        final int sectionX = chunkX >> this.sectionChunkShift;
+        final int sectionZ = chunkZ >> this.sectionChunkShift;
+        final long sectionKey = CoordinateUtils.getChunkKey(sectionX, sectionZ);
+
+        final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
+
+        return section == null ? null : section.getRegion();
+    }
+
     public ThreadedRegion<R, S> getRegionAtSynchronised(final int chunkX, final int chunkZ) {
         final int sectionX = chunkX >> this.sectionChunkShift;
         final int sectionZ = chunkZ >> this.sectionChunkShift;
-        final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+        final long sectionKey = CoordinateUtils.getChunkKey(sectionX, sectionZ);
 
-        // Try optimistic read first to reduce lock contention
-        final long stamp = this.regionLock.tryOptimisticRead();
-        if (stamp != 0L) {
-            final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
-            final ThreadedRegion<R, S> optimisticRet = section == null ? null : section.getRegionPlain();
-
-            if (this.regionLock.validate(stamp)) {
+        // try an optimistic read
+        {
+            final long readAttempt = this.regionLock.tryOptimisticRead();
+            final ThreadedRegionSection<R, S> optimisticSection = this.sections.get(sectionKey);
+            final ThreadedRegion<R, S> optimisticRet =
+                optimisticSection == null ? null : optimisticSection.getRegionPlain();
+            if (this.regionLock.validate(readAttempt)) {
                 return optimisticRet;
             }
         }
 
-        // Failed optimistic read, fall back to acquiring the lock
+        // failed, fall back to acquiring the lock
         this.regionLock.readLock();
         try {
             final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
+
             return section == null ? null : section.getRegionPlain();
         } finally {
             this.regionLock.tryUnlockRead();
         }
-    }
-
-    /**
-     * Returns the region at the specified chunk coordinates without synchronisation.
-     * This method should only be called when the caller already holds appropriate locks
-     * or when the result does not need to be consistent.
-     *
-     * @param chunkX the chunk X coordinate
-     * @param chunkZ the chunk Z coordinate
-     * @return the region containing the specified chunk, or null if none exists
-     */
-    public ThreadedRegion<R, S> getRegionAtUnsynchronised(final int chunkX, final int chunkZ) {
-        final int sectionX = chunkX >> this.sectionChunkShift;
-        final int sectionZ = chunkZ >> this.sectionChunkShift;
-        final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
-
-        final ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
-        return section == null ? null : section.getRegionPlain();
-    }
-
-    public ThreadedRegion<R, S> getRegionForChunk(final int chunkX, final int chunkZ) {
-        return this.getRegionAtSynchronised(chunkX, chunkZ);
     }
 
     /**
@@ -305,7 +276,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     public void addChunk(final int chunkX, final int chunkZ) {
         final int sectionX = chunkX >> this.sectionChunkShift;
         final int sectionZ = chunkZ >> this.sectionChunkShift;
-    final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+        final long sectionKey = CoordinateUtils.getChunkKey(sectionX, sectionZ);
 
         // Given that for each section, no addChunk/removeChunk can occur in parallel,
         // we can avoid the lock IF the section exists AND it has a non-zero chunk count.
@@ -347,7 +318,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
                     final int neighbourX = dx + sectionX;
                     final int neighbourZ = dz + sectionZ;
-                    final long neighbourKey = CoordinateUtil.getChunkKey(neighbourX, neighbourZ);
+                    final long neighbourKey = CoordinateUtils.getChunkKey(neighbourX, neighbourZ);
 
                     ThreadedRegionSection<R, S> neighbourSection = this.sections.get(neighbourKey);
 
@@ -480,7 +451,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
     public void removeChunk(final int chunkX, final int chunkZ) {
         final int sectionX = chunkX >> this.sectionChunkShift;
         final int sectionZ = chunkZ >> this.sectionChunkShift;
-    final long sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+        final long sectionKey = CoordinateUtils.getChunkKey(sectionX, sectionZ);
 
         // Given that for each section, no addChunk/removeChunk can occur in parallel,
         // we can avoid the lock IF the section exists AND it has a chunk count > 1
@@ -507,7 +478,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
                     final int neighbourX = dx + sectionX;
                     final int neighbourZ = dz + sectionZ;
-                    final long neighbourKey = CoordinateUtil.getChunkKey(neighbourX, neighbourZ);
+                    final long neighbourKey = CoordinateUtils.getChunkKey(neighbourX, neighbourZ);
 
                     final ThreadedRegionSection<R, S> neighbourSection = this.sections.get(neighbourKey);
 
@@ -563,7 +534,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         if (removeDeadSections) {
             // kill dead sections
             for (final ThreadedRegionSection<R, S> deadSection : region.deadSections) {
-                final long key = CoordinateUtil.getChunkKey(deadSection.sectionX, deadSection.sectionZ);
+                final long key = CoordinateUtils.getChunkKey(deadSection.sectionX, deadSection.sectionZ);
 
                 if (!deadSection.isEmpty()) {
                     throw new IllegalStateException("Dead section '" + deadSection.toStringWithRegion() + "' is marked dead but has chunks!");
@@ -628,7 +599,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                             continue;
                         }
 
-                        final ThreadedRegionSection<R, S> section = recalculateSections.remove(CoordinateUtil.getChunkKey(dx + centerX, dz + centerZ));
+                        final ThreadedRegionSection<R, S> section = recalculateSections.remove(CoordinateUtils.getChunkKey(dx + centerX, dz + centerZ));
                         if (section == null) {
                             continue;
                         }
@@ -709,8 +680,6 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         private static final int STATE_TICKING       = 2;
         private static final int STATE_DEAD          = 3;
 
-        private static final String[] STATE_NAMES = {"TRANSIENT", "READY", "TICKING", "DEAD"};
-
         public final long id;
 
         private int state;
@@ -724,17 +693,6 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
         private final ReferenceOpenHashSet<ThreadedRegion<R, S>> mergeIntoLater = new ReferenceOpenHashSet<>();
         private final ReferenceOpenHashSet<ThreadedRegion<R, S>> expectingMergeFrom = new ReferenceOpenHashSet<>();
-
-        /**
-         * Returns a human-readable string representation of the region's current state for debugging purposes.
-         */
-        public String getStateForDebug() {
-            final int s = this.state;
-            if (s >= 0 && s < STATE_NAMES.length) {
-                return STATE_NAMES[s];
-            }
-            return "UNKNOWN(" + s + ")";
-        }
 
         public ThreadedRegion(final ThreadedRegionizer<R, S> regioniser) {
             this.regioniser = regioniser;
@@ -787,42 +745,15 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             }
         }
 
-        /**
-         * Fast check to determine if this region contains any chunks.
-         * This method does not allocate and is safe to call from hot paths.
-         * Should be called while holding the regionizer read lock.
-         *
-         * @return true if the region has at least one chunk
-         */
-        public boolean hasAnyChunks() {
-            final boolean lock = this.regioniser.writeLockOwner != Thread.currentThread();
-            if (lock) {
-                this.regioniser.regionLock.readLock();
-            }
-            try {
-                for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
-                    if (!section.isEmpty()) {
-                        return true;
-                    }
-                }
-                return false;
-            } finally {
-                if (lock) {
-                    this.regioniser.regionLock.tryUnlockRead();
-                }
-            }
-        }
-
         public Long getCenterSection() {
             final LongArrayList sections = this.getOwnedSections();
 
-
             final LongComparator comparator = (final long k1, final long k2) -> {
-                final int x1 = CoordinateUtil.getChunkX(k1);
-                final int x2 = CoordinateUtil.getChunkX(k2);
+                final int x1 = CoordinateUtils.getChunkX(k1);
+                final int x2 = CoordinateUtils.getChunkX(k2);
 
-                final int z1 = CoordinateUtil.getChunkZ(k1);
-                final int z2 = CoordinateUtil.getChunkZ(k2);
+                final int z1 = CoordinateUtils.getChunkZ(x1);
+                final int z2 = CoordinateUtils.getChunkZ(x2);
 
                 final int zCompare = Integer.compare(z1, z2);
                 if (zCompare != 0) {
@@ -846,11 +777,11 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             final LongArrayList chunks = this.getOwnedChunks();
 
             final LongComparator comparator = (final long k1, final long k2) -> {
-                final int x1 = CoordinateUtil.getChunkX(k1);
-                final int x2 = CoordinateUtil.getChunkX(k2);
+                final int x1 = CoordinateUtils.getChunkX(k1);
+                final int x2 = CoordinateUtils.getChunkX(k2);
 
-                final int z1 = CoordinateUtil.getChunkZ(k1);
-                final int z2 = CoordinateUtil.getChunkZ(k2);
+                final int z1 = CoordinateUtils.getChunkZ(k1);
+                final int z2 = CoordinateUtils.getChunkZ(k2);
 
                 final int zCompare = Integer.compare(z1, z2);
                 if (zCompare != 0) {
@@ -868,7 +799,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
             final long middle = chunks.getLong(chunks.size() >> 1);
 
-            return new ChunkPos(CoordinateUtil.getChunkX(middle), CoordinateUtil.getChunkZ(middle));
+            return new ChunkPos(CoordinateUtils.getChunkX(middle), CoordinateUtils.getChunkZ(middle));
         }
 
         private void onCreate() {
@@ -1028,12 +959,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         public boolean tryMarkTicking(final BooleanSupplier abort) {
             this.regioniser.acquireWriteLock();
             try {
-                final boolean abortResult = abort.getAsBoolean();
-                if (this.state != STATE_READY || abortResult) {
-                    if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
-                        LOGGER.info("[VERBOSE] tryMarkTicking region {} FAILED: state={} (expected READY=1), abort={}",
-                            this.id, this.getStateForDebug(), abortResult);
-                    }
+                if (this.state != STATE_READY || abort.getAsBoolean()) {
                     return false;
                 }
 
@@ -1042,10 +968,6 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 }
 
                 this.state = STATE_TICKING;
-                if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
-                    LOGGER.info("[VERBOSE] tryMarkTicking region {} SUCCESS: state now={}",
-                        this.id, this.getStateForDebug());
-                }
                 return true;
             } finally {
                 this.regioniser.releaseWriteLock();
@@ -1056,21 +978,12 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             this.regioniser.acquireWriteLock();
             try {
                 if (this.state != STATE_TICKING) {
-                    if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
-                        LOGGER.info("[VERBOSE] markNotTicking region {} FAILED: state={} (expected TICKING=2)",
-                            this.id, this.getStateForDebug());
-                    }
                     throw new IllegalStateException("Attempting to release non-locked state");
                 }
 
                 this.regioniser.onRegionRelease(this);
 
-                final boolean isReady = this.state == STATE_READY;
-                if (org.bacon.ruthenium.world.TickRegionScheduler.getInstance().isVerboseLogging()) {
-                    LOGGER.info("[VERBOSE] markNotTicking region {} SUCCESS: state now={}, isReady={}",
-                        this.id, this.getStateForDebug(), isReady);
-                }
-                return isReady;
+                return this.state == STATE_READY;
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to release region " + this, throwable);
                 SneakyThrow.sneaky(throwable);
@@ -1142,7 +1055,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         private ThreadedRegionSection(final int sectionX, final int sectionZ, final ThreadedRegionizer<R, S> regioniser) {
             this.sectionX = sectionX;
             this.sectionZ = sectionZ;
-            this.sectionKey = CoordinateUtil.getChunkKey(sectionX, sectionZ);
+            this.sectionKey = CoordinateUtils.getChunkKey(sectionX, sectionZ);
             this.chunksBitset = new long[Math.max(1, regioniser.regionSectionChunkSize * regioniser.regionSectionChunkSize / Long.SIZE)];
             this.regioniser = regioniser;
             this.regionChunkShift = regioniser.sectionChunkShift;
@@ -1194,7 +1107,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                     final int localX = idx & mask;
                     final int localZ = (idx >>> shift) & mask;
 
-                    ret.add(CoordinateUtil.getChunkKey(localX | offsetX, localZ | offsetZ));
+                    ret.add(CoordinateUtils.getChunkKey(localX | offsetX, localZ | offsetZ));
                 }
             }
 

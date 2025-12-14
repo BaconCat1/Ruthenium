@@ -605,7 +605,7 @@ public final class TickRegionScheduler {
         this.currentRegion.remove();
     }
 
-    boolean tickRegion(final RegionScheduleHandle handle, final BooleanSupplier guard) {
+    boolean tickRegion(final RegionScheduleHandle handle, final BooleanSupplier guard, final int tickCount) {
         final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region = handle.getRegion();
         final RegionTickData data = handle.getData();
         final ServerWorld world = region.regioniser.world;
@@ -627,34 +627,41 @@ public final class TickRegionScheduler {
         // hasn't been synchronized yet
         final long[] chunkSnapshot = region.getOwnedChunks().toLongArray();
         boolean chunkLoopAborted = false;
-        for (int i = 0; i < chunkSnapshot.length; ++i) {
-            if (!guard.getAsBoolean()) {
-                chunkLoopAborted = i < chunkSnapshot.length;
-                break;
-            }
-            final long chunkKey = chunkSnapshot[i];
-            final int chunkX = CoordinateUtil.getChunkX(chunkKey);
-            final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
-            // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
-            if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
-                continue;
-            }
-            final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
-            if (worldChunk == null) {
-                skippedNotFull++;
-                continue;
-            }
 
-            ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
-            try {
-                ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
-                this.tickChunkEntities(world, chunkManager, tickView, chunkX, chunkZ);
-                tickedChunks++;
-            } catch (final Throwable throwable) {
-                LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
-            } finally {
-                ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
+        // Acquire read lock to prevent main thread from broadcasting chunk data while we're ticking
+        tickView.acquireChunkReadLock();
+        try {
+            for (int i = 0; i < chunkSnapshot.length; ++i) {
+                if (!guard.getAsBoolean()) {
+                    chunkLoopAborted = i < chunkSnapshot.length;
+                    break;
+                }
+                final long chunkKey = chunkSnapshot[i];
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
+                if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
+                    continue;
+                }
+                final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
+                if (worldChunk == null) {
+                    skippedNotFull++;
+                    continue;
+                }
+
+                ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
+                try {
+                    ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
+                    this.tickChunkEntities(world, chunkManager, tickView, chunkX, chunkZ);
+                    tickedChunks++;
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
+                } finally {
+                    ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
+                }
             }
+        } finally {
+            tickView.releaseChunkReadLock();
         }
         if (chunkLoopAborted) {
             this.logRegionChunkAbort(world, region, tickedChunks, chunkSnapshot.length);
@@ -662,43 +669,59 @@ public final class TickRegionScheduler {
 
         // Tick block entities for this region
         if (worldData != null && guard.getAsBoolean()) {
+            tickView.acquireChunkReadLock();
             try {
                 worldData.tickBlockEntities();
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick block entities in region {}", region.id, throwable);
+            } finally {
+                tickView.releaseChunkReadLock();
             }
         }
 
         // Process block events for this region
         if (worldData != null && guard.getAsBoolean()) {
+            tickView.acquireChunkReadLock();
             try {
                 worldData.processBlockEvents();
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to process block events in region {}", region.id, throwable);
+            } finally {
+                tickView.releaseChunkReadLock();
             }
         }
 
         // Tick scheduled ticks (block/fluid ticks) for this region
         if (guard.getAsBoolean()) {
             try {
-                this.tickScheduledTicks(world, chunkSnapshot);
+                this.tickScheduledTicks(world, chunkSnapshot, tickView, tickCount);
             } catch (final Throwable throwable) {
                 LOGGER.error("Failed to tick scheduled ticks in region {}", region.id, throwable);
             }
         }
 
         processedTasks += runQueuedTasks(data, region, guard);
-        data.advanceCurrentTick();
-        data.advanceRedstoneTick();
+        // Advance tick counters by tickCount to properly handle lag compensation
+        // When a region is behind, tickCount > 1, so we advance by the appropriate amount
+        for (int i = 0; i < tickCount; i++) {
+            data.advanceCurrentTick();
+            data.advanceRedstoneTick();
+        }
         final long lagCompTick = worldData == null ? -1L : worldData.getLagCompensationTick();
         final long tickDuration = System.nanoTime() - tickStart;
         final double tickMs = tickDuration / 1_000_000.0;
 
+        // Log when region is lagging (tickCount > 1 means we're behind)
+        if (tickCount > 1 && this.verboseLogging) {
+            LOGGER.info("[REGION LAG] Region {} is {} ticks behind ({}ms tick time)",
+                region.id, tickCount, String.format("%.2f", tickMs));
+        }
+
         // Only log region ticks when verbose logging is enabled to avoid I/O contention
         if (this.verboseLogging && tickedChunks > 0) {
             final String threadName = Thread.currentThread().getName();
-            LOGGER.info("[REGION TICK] Region {} ticked {} chunks in {}ms on thread '{}' (world={})",
-                region.id, tickedChunks, String.format("%.2f", tickMs), threadName, world.getRegistryKey().getValue());
+            LOGGER.info("[REGION TICK] Region {} ticked {} chunks in {}ms on thread '{}' (world={}, tickCount={})",
+                region.id, tickedChunks, String.format("%.2f", tickMs), threadName, world.getRegistryKey().getValue(), tickCount);
         }
 
         if (this.verboseLogging) {
@@ -789,17 +812,25 @@ public final class TickRegionScheduler {
     /**
      * Ticks scheduled block/fluid ticks for a region.
      * This runs on the region thread to process ticks that are due.
+     * When tickCount > 1, we process scheduled ticks for multiple game ticks to catch up.
      */
-    private void tickScheduledTicks(final ServerWorld world, final long[] chunkSnapshot) {
+    private void tickScheduledTicks(final ServerWorld world, final long[] chunkSnapshot, final RegionizedWorldData tickView, final int tickCount) {
         if (world.isDebugWorld() || !world.getTickManager().shouldTick()) {
             return;
         }
-        final long time = world.getTime();
+        // When lagging, we need to process scheduled ticks for all the ticks we're behind
+        // The effective time is the current time plus tickCount-1 (since we're catching up)
+        final long baseTime = world.getTime();
         final ServerWorldAccessor accessor = (ServerWorldAccessor) world;
 
-        final int maxTicks = this.maxScheduledTicksPerRegion;
-        tickScheduledTicks(world, world.getBlockTickScheduler(), time, maxTicks, accessor::ruthenium$invokeTickBlock, chunkSnapshot);
-        tickScheduledTicks(world, world.getFluidTickScheduler(), time, maxTicks, accessor::ruthenium$invokeTickFluid, chunkSnapshot);
+        // Process scheduled ticks for each tick we're behind
+        // This ensures scheduled ticks execute at the right time even when the region is lagging
+        final int maxTicksPerCycle = this.maxScheduledTicksPerRegion;
+        for (int t = 0; t < tickCount; t++) {
+            final long effectiveTime = baseTime + t;
+            tickScheduledTicks(world, world.getBlockTickScheduler(), effectiveTime, maxTicksPerCycle, accessor::ruthenium$invokeTickBlock, chunkSnapshot, tickView);
+            tickScheduledTicks(world, world.getFluidTickScheduler(), effectiveTime, maxTicksPerCycle, accessor::ruthenium$invokeTickFluid, chunkSnapshot, tickView);
+        }
     }
 
     private static <T> void tickScheduledTicks(final ServerWorld world,
@@ -807,7 +838,8 @@ public final class TickRegionScheduler {
                                                final long time,
                                                final int maxTicks,
                                                final java.util.function.BiConsumer<net.minecraft.util.math.BlockPos, T> ticker,
-                                               final long[] chunkSnapshot) {
+                                               final long[] chunkSnapshot,
+                                               final RegionizedWorldData tickView) {
         final net.minecraft.server.world.ServerChunkManager chunkManager = world.getChunkManager();
         @SuppressWarnings("unchecked")
         final org.bacon.ruthenium.mixin.accessor.WorldTickSchedulerAccessor<T> accessor =
@@ -852,13 +884,19 @@ public final class TickRegionScheduler {
             net.minecraft.world.tick.OrderedTick::triggerTick
         );
 
-        for (int i = 0; i < toRun.size(); i++) {
-            final net.minecraft.world.tick.OrderedTick<T> tick = toRun.get(i);
-            try {
-                ticker.accept(tick.pos(), tick.type());
-            } catch (final Throwable throwable) {
-                LOGGER.error("Failed to run scheduled tick at {} in {}", tick.pos(), world.getRegistryKey().getValue(), throwable);
+        // Acquire read lock to prevent main thread from broadcasting chunk data while we're modifying chunks
+        tickView.acquireChunkReadLock();
+        try {
+            for (int i = 0; i < toRun.size(); i++) {
+                final net.minecraft.world.tick.OrderedTick<T> tick = toRun.get(i);
+                try {
+                    ticker.accept(tick.pos(), tick.type());
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to run scheduled tick at {} in {}", tick.pos(), world.getRegistryKey().getValue(), throwable);
+                }
             }
+        } finally {
+            tickView.releaseChunkReadLock();
         }
     }
 
@@ -948,7 +986,14 @@ public final class TickRegionScheduler {
                                 final FallbackReason reason,
                                 final FallbackDiagnostics diagnostics) {
         final String detail = diagnostics == null ? "stage=unknown" : diagnostics.describe();
-        final String action = reason.fallbackToVanilla() ? "Scheduler fallback" : "Scheduler skip";
+        final boolean allowVanilla = reason.fallbackToVanilla()
+            && (diagnostics == null || !diagnostics.activeRegions());
+        final String action = allowVanilla ? "Scheduler fallback" : "Scheduler skip";
+
+        if (!allowVanilla && reason.fallbackToVanilla() && diagnostics != null && diagnostics.activeRegions()) {
+            LOGGER.warn("Suppressed vanilla fallback while regions remain active to avoid cross-thread chunk access (world={}, {})",
+                describeWorld(world), detail);
+        }
 
         // NO_ACTIVE_REGIONS is expected for empty dimensions (no players there) - log at DEBUG level
         if (reason == FallbackReason.NO_ACTIVE_REGIONS) {
@@ -960,7 +1005,7 @@ public final class TickRegionScheduler {
             this.logFallbackMessage("{}: reason={} (world={}, {})",
                 action, reason.description(), describeWorld(world), detail);
         }
-        return !reason.fallbackToVanilla();
+        return !allowVanilla;
     }
 
     private void logBudgetAbortIfExceeded(final ServerWorld world,
@@ -1476,7 +1521,7 @@ public final class TickRegionScheduler {
             long tickEnd = tickStart;
             boolean readyForNext = true;
             try {
-                success = this.scheduler.tickRegion(this, guard);
+                success = this.scheduler.tickRegion(this, guard, tickCount);
                 tickEnd = System.nanoTime();
                 if (this.scheduler.verboseLogging) {
                     LOGGER.info("[VERBOSE] runTick region {} tickRegion returned success={} (duration={}ms)",

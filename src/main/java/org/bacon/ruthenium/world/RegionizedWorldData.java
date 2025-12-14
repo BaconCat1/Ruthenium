@@ -13,6 +13,8 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BooleanSupplier;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -44,6 +46,8 @@ import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
  */
 public class RegionizedWorldData {
 
+    private static final org.apache.logging.log4j.Logger LOGGER = org.apache.logging.log4j.LogManager.getLogger(RegionizedWorldData.class);
+
     private final ServerWorld world;
     private final Object chunkLock = new Object();
     private final LongSet tickingChunks = new LongOpenHashSet();
@@ -70,6 +74,14 @@ public class RegionizedWorldData {
     private final List<BlockEntityTickInvoker> pendingBlockEntityTickers = new ArrayList<>();
     private final ReferenceOpenHashSet<BlockEntityTickInvoker> blockEntityTickerSet = new ReferenceOpenHashSet<>();
     private volatile boolean tickingBlockEntities = false;
+
+    /**
+     * Lock to synchronize chunk data access between region threads and main thread.
+     * Region threads acquire read lock during chunk ticking (allows parallel ticking).
+     * Main thread acquires write lock before broadcasting updates (blocks until regions complete).
+     */
+    private final ReentrantReadWriteLock chunkAccessLock = new ReentrantReadWriteLock();
+    private static final long CHUNK_LOCK_TIMEOUT_MILLIS = 50L;
 
     /**
      * Creates a new world data wrapper for the supplied world.
@@ -346,6 +358,52 @@ public class RegionizedWorldData {
         this.setHandlingTick(false);
     }
 
+    /**
+     * Acquires the read lock for chunk access. Region threads call this before ticking chunks.
+     * Multiple region threads can hold the read lock simultaneously for parallel ticking.
+     */
+    public void acquireChunkReadLock() {
+        this.chunkAccessLock.readLock().lock();
+    }
+
+    /**
+     * Releases the read lock for chunk access. Region threads call this after ticking chunks.
+     */
+    public void releaseChunkReadLock() {
+        this.chunkAccessLock.readLock().unlock();
+    }
+
+    /**
+     * Attempts to acquire the write lock for chunk access with a timeout.
+     * Main thread calls this before broadcasting chunk updates to players.
+     * This blocks until all region threads release their read locks.
+     *
+     * @return {@code true} if the lock was acquired, {@code false} if timeout was reached
+     */
+    public boolean tryAcquireChunkWriteLock() {
+        try {
+            return this.chunkAccessLock.writeLock().tryLock(CHUNK_LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Interrupted while waiting for chunk write lock", e);
+            return false;
+        }
+    }
+
+    /**
+     * Releases the write lock for chunk access. Main thread calls this after broadcasting updates.
+     */
+    public void releaseChunkWriteLock() {
+        this.chunkAccessLock.writeLock().unlock();
+    }
+
+    /**
+     * Returns whether the chunk access write lock is held by the current thread.
+     */
+    public boolean isChunkWriteLockHeld() {
+        return this.chunkAccessLock.isWriteLockedByCurrentThread();
+    }
+
     private void tickConnections() {
         final List<ServerPlayerEntity> players = List.copyOf(this.players); // avoids CME when handlers disconnect players
         for (final ServerPlayerEntity player : players) {
@@ -504,12 +562,26 @@ public class RegionizedWorldData {
          * chunk-system queues (seen as LongLinkedOpenHashSet.removeFirstLong crashes).
          *
          * Instead, run the required sub-steps in vanilla order while still avoiding chunk ticking.
+         *
+         * broadcastUpdates() reads PalettedContainer data to send chunk updates to players.
+         * We must acquire the write lock to ensure no region threads are modifying chunks.
          */
         ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
         ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
         if (!this.world.isDebugWorld()) {
-            ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
-            ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
+            // Acquire write lock to prevent region threads from modifying chunks during broadcast
+            if (this.tryAcquireChunkWriteLock()) {
+                try {
+                    ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
+                    ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
+                } finally {
+                    this.releaseChunkWriteLock();
+                }
+            } else {
+                // Could not acquire lock - skip broadcast this tick to avoid blocking
+                LOGGER.debug("Skipped broadcastUpdates for {} - region threads are still ticking chunks",
+                    this.world.getRegistryKey().getValue());
+            }
         }
         ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
         ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();

@@ -4,6 +4,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.ChunkPos;
 import org.bacon.ruthenium.Ruthenium;
@@ -15,6 +16,9 @@ import org.bacon.ruthenium.world.RegionTickStats;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
 
 import java.text.NumberFormat;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -154,10 +158,70 @@ public final class RegionCommand {
                         .then(literal("status").executes(ctx -> { ctx.getSource().sendFeedback(() -> Text.literal("Scheduler logging is: " + (RegionDebug.isEnabled(RegionDebug.LogCategory.SCHEDULER) ? "enabled" : "disabled")), false); return 1; }))
                     )
                 )
-            );
+            )
+            .then(literal("list").executes(ctx -> {
+                final ServerCommandSource source = ctx.getSource();
+                final ServerWorld world = source.getWorld();
+                if (!(world instanceof RegionizedServerWorld regionized)) {
+                    source.sendError(Text.literal("World is not regionized."));
+                    return 0;
+                }
+
+                final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer = regionized.ruthenium$getRegionizer();
+                final List<RegionInfo> regions = new ArrayList<>();
+
+                regionizer.computeForAllRegions(region -> {
+                    final RegionTickStats stats = region.getData().getTickStats();
+                    final RegionTickStats.Snapshot snapshot = stats == null ? RegionTickStats.Snapshot.EMPTY : stats.snapshot();
+                    final ChunkPos center = region.getCenterChunk();
+                    regions.add(new RegionInfo(
+                        region.id,
+                        region.getData().getChunks().size(),
+                        snapshot.getTPS(),
+                        snapshot.getMSPT(),
+                        snapshot.isLagging(),
+                        center != null ? center.x : 0,
+                        center != null ? center.z : 0
+                    ));
+                });
+
+                if (regions.isEmpty()) {
+                    source.sendFeedback(() -> Text.literal("No active regions in this world."), false);
+                    return 1;
+                }
+
+                // Sort by MSPT descending (laggiest first)
+                regions.sort(Comparator.comparingDouble(RegionInfo::mspt).reversed());
+
+                final StringBuilder sb = new StringBuilder(256);
+                sb.append("§6--- Region List (").append(regions.size()).append(" regions) ---§r\n");
+                for (final RegionInfo info : regions) {
+                    final String statusColor = info.lagging() ? "§c" : "§a";
+                    sb.append(statusColor)
+                      .append("Region ").append(info.id())
+                      .append("§r: TPS=").append(formatDouble(info.tps()))
+                      .append(" MSPT=").append(formatDouble(info.mspt()))
+                      .append(" chunks=").append(info.chunks())
+                      .append(" center=(").append(info.centerX()).append(",").append(info.centerZ()).append(")")
+                      .append('\n');
+                }
+
+                // Summary
+                final long laggingCount = regions.stream().filter(RegionInfo::lagging).count();
+                if (laggingCount > 0) {
+                    sb.append("§c").append(laggingCount).append(" region(s) lagging (>50 MSPT)§r");
+                } else {
+                    sb.append("§aAll regions running at full speed§r");
+                }
+
+                source.sendFeedback(() -> Text.literal(sb.toString()), false);
+                return 1;
+            }));
 
         dispatcher.register(root);
     }
+
+    private record RegionInfo(long id, int chunks, double tps, double mspt, boolean lagging, int centerX, int centerZ) {}
 
     /**
      * Formats an MSPT or TPS value using a precision appropriate for its magnitude.
