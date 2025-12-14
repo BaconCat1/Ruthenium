@@ -15,6 +15,7 @@
     "EntityTrackingSectionMixin",
     "SectionedEntityCacheMixin",
     "WorldTickSchedulerMixin",
+    "ChunkTickSchedulerMixin",
     "ServerChunkLoadingManagerThreadSafetyMixin",
     "ServerPlayNetworkHandlerMixin",
     "accessor.ServerWorldAccessor",
