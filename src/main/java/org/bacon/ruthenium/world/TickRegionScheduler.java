@@ -477,7 +477,7 @@ public final class TickRegionScheduler {
             if ("TICKING".equals(stateStr)) {
                 if (this.verboseLogging) {
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - currently TICKING (chunks={})",
-                        region.id, region.getOwnedChunks().size());
+                        region.id, region.getOwnedChunkCount());
                 }
                 recent[0] = true;
                 return;
@@ -493,14 +493,14 @@ public final class TickRegionScheduler {
                     if (this.verboseLogging) {
                         final long untilScheduledMs = TimeUnit.NANOSECONDS.toMillis(scheduledStart - now);
                         LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - never ticked but scheduled in {}ms (state={}, chunks={})",
-                            region.id, untilScheduledMs, region.getStateForDebug(), region.getOwnedChunks().size());
+                            region.id, untilScheduledMs, region.getStateForDebug(), region.getOwnedChunkCount());
                     }
                     recent[0] = true;
                 } else {
                     stalledRegions.add(region.id);
                     if (this.verboseLogging) {
                         LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - never ticked, no future schedule (state={}, scheduledStart={}, chunks={})",
-                            region.id, region.getStateForDebug(), scheduledStart, region.getOwnedChunks().size());
+                            region.id, region.getStateForDebug(), scheduledStart, region.getOwnedChunkCount());
                     }
                 }
             } else if (now - lastTickStart > this.regionTickStallNanos) {
@@ -509,10 +509,10 @@ public final class TickRegionScheduler {
                 if (this.verboseLogging) {
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} STALLED - last tick {}ms ago (state={}, scheduledStart={}, chunks={})",
                         region.id, ageMillis, region.getStateForDebug(),
-                        scheduledStart, region.getOwnedChunks().size());
+                        scheduledStart, region.getOwnedChunkCount());
                 }
                 LOGGER.warn("Region {} in {} has not ticked for {}ms (chunks={}, scheduledStart={}, isMarkedNonSchedulable={})",
-                    region.id, describeWorld(world), ageMillis, region.getOwnedChunks().size(),
+                    region.id, describeWorld(world), ageMillis, region.getOwnedChunkCount(),
                     scheduledStart, handle.isMarkedNonSchedulable());
             } else if (!handle.hasScheduledDeadline()) {
                 stalledRegions.add(region.id);
@@ -521,14 +521,14 @@ public final class TickRegionScheduler {
                         region.id, region.getStateForDebug(), lastTickStart);
                 }
                 LOGGER.warn("Region {} in {} lost its scheduled deadline (lastStart={}, chunks={})",
-                    region.id, describeWorld(world), lastTickStart, region.getOwnedChunks().size());
+                    region.id, describeWorld(world), lastTickStart, region.getOwnedChunkCount());
                 handle.prepareForActivation();
                 this.scheduler.notifyTasks(handle);
             } else {
                 if (this.verboseLogging) {
                     final long ageMillis = TimeUnit.NANOSECONDS.toMillis(now - lastTickStart);
                     LOGGER.info("[VERBOSE] hasRecentRegionTicks region {} OK - last tick {}ms ago (state={}, chunks={})",
-                        region.id, ageMillis, region.getStateForDebug(), region.getOwnedChunks().size());
+                        region.id, ageMillis, region.getStateForDebug(), region.getOwnedChunkCount());
                 }
                 recent[0] = true;
             }
@@ -625,7 +625,7 @@ public final class TickRegionScheduler {
         // Use region.getOwnedChunks() which tracks chunks at the regionizer section level,
         // ensuring we tick all chunks that belong to this region even if RegionTickData
         // hasn't been synchronized yet
-        final long[] chunkSnapshot = region.getOwnedChunks().toLongArray();
+        final long[] chunkSnapshot = region.getOwnedChunkArray();
         boolean chunkLoopAborted = false;
 
         // Acquire read lock to prevent main thread from broadcasting chunk data while we're ticking
@@ -1061,7 +1061,9 @@ public final class TickRegionScheduler {
                 describeHandle(handle), millis, thread.getName());
             LOGGER.warn(message);
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER, message);
-            if (LOGGER.isDebugEnabled()) {
+            if (RegionDebug.isEnabled(RegionDebug.LogCategory.SCHEDULER)) {
+                LOGGER.warn("Region watchdog stack trace:\n{}", formatStackTrace(thread));
+            } else if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("Region watchdog stack trace:\n{}", formatStackTrace(thread));
             }
         } else {
@@ -1069,7 +1071,9 @@ public final class TickRegionScheduler {
             if (world != null) {
                 LOGGER.warn("Main thread watchdog warning: world {} tick exceeded {} ms",
                     world.getRegistryKey().getValue(), String.format(Locale.ROOT, "%.2f", millis));
-                if (LOGGER.isDebugEnabled()) {
+                if (RegionDebug.isEnabled(RegionDebug.LogCategory.SCHEDULER)) {
+                    LOGGER.warn("Main thread stack:\n{}", formatStackTrace(thread));
+                } else if (LOGGER.isDebugEnabled()) {
                     LOGGER.debug("Main thread stack:\n{}", formatStackTrace(thread));
                 }
             } else {
@@ -1293,7 +1297,7 @@ public final class TickRegionScheduler {
             regionized.ruthenium$getRegionizer();
         regionizer.computeForAllRegions(region -> {
             final RegionTickData data = region.getData();
-            final int chunkCount = region.getOwnedChunks().size();
+            final int chunkCount = region.getOwnedChunkCount();
             final int pendingTasks = data.getTaskQueue().size();
             final RegionTickStats stats = data.getTickStats();
             final double lastTickMs = stats == null ? 0.0D : stats.getLastTickNanos() / 1_000_000.0D;
@@ -1464,7 +1468,7 @@ public final class TickRegionScheduler {
             if (this.scheduler.verboseLogging) {
                 LOGGER.info("[VERBOSE] runTick START region {} (state={}, nonSchedulable={}, chunks={})",
                     this.region.id, this.region.getStateForDebug(), this.isMarkedNonSchedulable(),
-                    this.region.getOwnedChunks().size());
+                    this.region.getOwnedChunkCount());
             }
 
             if (this.isMarkedNonSchedulable()) {
@@ -1514,7 +1518,7 @@ public final class TickRegionScheduler {
 
             RegionDebug.log(RegionDebug.LogCategory.SCHEDULER,
                 "Tick start region {} (world={}, chunks={})", this.region.id,
-                world.getRegistryKey().getValue(), this.region.getOwnedChunks().size());
+                world.getRegistryKey().getValue(), this.region.getOwnedChunkCount());
 
             this.scheduler.enterRegionContext(this.region, world, this);
             boolean success = false;
@@ -1641,10 +1645,10 @@ public final class TickRegionScheduler {
             if (!willReschedule) {
                 if (this.scheduler.verboseLogging) {
                     LOGGER.info("[VERBOSE] runTick region {} END - will NOT reschedule! (readyForNext={}, nonSchedulable={}, state={}, chunks={})",
-                        this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getStateForDebug(), this.region.getOwnedChunks().size());
+                        this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getStateForDebug(), this.region.getOwnedChunkCount());
                 }
                 LOGGER.error("Region {} will NOT be rescheduled! (readyForNext={}, nonSchedulable={}, chunks={})",
-                    this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getOwnedChunks().size());
+                    this.region.id, readyForNext, this.isMarkedNonSchedulable(), this.region.getOwnedChunkCount());
             } else {
                 if (this.scheduler.verboseLogging) {
                     LOGGER.info("[VERBOSE] runTick region {} END - will reschedule (state={}, nextStart={}, tickCount={})",

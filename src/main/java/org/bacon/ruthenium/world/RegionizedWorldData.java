@@ -566,25 +566,24 @@ public class RegionizedWorldData {
          * broadcastUpdates() reads PalettedContainer data to send chunk updates to players.
          * We must acquire the write lock to ensure no region threads are modifying chunks.
          */
-        ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
-        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
-        if (!this.world.isDebugWorld()) {
-            // Acquire write lock to prevent region threads from modifying chunks during broadcast
-            if (this.tryAcquireChunkWriteLock()) {
-                try {
+        if (this.tryAcquireChunkWriteLock()) {
+            try {
+                ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
+                ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
+                if (!this.world.isDebugWorld()) {
                     ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
                     ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
-                } finally {
-                    this.releaseChunkWriteLock();
                 }
-            } else {
-                // Could not acquire lock - skip broadcast this tick to avoid blocking
-                LOGGER.debug("Skipped broadcastUpdates for {} - region threads are still ticking chunks",
-                    this.world.getRegistryKey().getValue());
+                ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
+                ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();
+            } finally {
+                this.releaseChunkWriteLock();
             }
+        } else {
+            // Could not acquire lock - skip broadcast this tick to avoid blocking
+            LOGGER.debug("Skipped chunk updates for {} - region threads are still ticking chunks",
+                this.world.getRegistryKey().getValue());
         }
-        ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
-        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();
 
         final LongOpenHashSet newTicking = new LongOpenHashSet();
         ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$forEachBlockTickingChunk(chunk -> {

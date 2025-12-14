@@ -162,10 +162,36 @@ class ThreadedRegionizerTest {
         Assertions.assertTrue(data.containsChunk(32, 0), "Merged data should include bridge chunk");
     }
 
+    @Test
+    void bufferSectionsShouldNotTriggerImmediateMerge() {
+        final RegionizerConfig config = RegionizerConfig.builder()
+            .emptySectionCreationRadius(2)
+            .mergeRadius(1)
+            .recalculationSectionCount(4)
+            .maxDeadSectionPercent(0.10D)
+            .sectionChunkShift(4)
+            .build();
+        final TestRegionCallbacks callbacks = new TestRegionCallbacks();
+        final ThreadedRegionizer<TestRegionData, TestSectionData> regionizer =
+            new ThreadedRegionizer<>(config, null, callbacks);
+
+        regionizer.addChunk(0, 0);
+        regionizer.addChunk(48, 0); // 3 sections away from origin, adjacent only to origin's buffer sections
+
+        Assertions.assertEquals(2, collectRegions(regionizer).size(),
+            "Expected separate regions when only buffer sections are adjacent");
+        Assertions.assertNotEquals(requireRegion(regionizer, 0, 0).id, requireRegion(regionizer, 48, 0).id);
+
+        // Adding a real bridge chunk should now merge the regions.
+        regionizer.addChunk(32, 0);
+        regionizer.addChunk(16, 0);
+        Assertions.assertEquals(1, collectRegions(regionizer).size(), "Expected merge after adding a bridge chunk");
+    }
+
     private TestHarness createHarness() {
         final RegionizerConfig config = RegionizerConfig.builder()
             .emptySectionCreationRadius(1)
-            .mergeRadius(1)
+            .mergeRadius(2)
             .recalculationSectionCount(4)
             .maxDeadSectionPercent(0.10D)
             .sectionChunkShift(4)

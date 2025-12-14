@@ -57,11 +57,11 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                               final int emptySectionCreateRadius, final int regionSectionMergeRadius,
                               final int regionSectionChunkShift, final ServerWorld world,
                               final RegionCallbacks<R, S> callbacks) {
-        if (emptySectionCreateRadius <= 0) {
-            throw new IllegalStateException("Region section create radius must be > 0");
+        if (emptySectionCreateRadius < 0) {
+            throw new IllegalStateException("Region section create radius must be >= 0");
         }
-        if (regionSectionMergeRadius <= 0) {
-            throw new IllegalStateException("Region section merge radius must be > 0");
+        if (regionSectionMergeRadius < 0) {
+            throw new IllegalStateException("Region section merge radius must be >= 0");
         }
         this.regionSectionChunkSize = 1 << regionSectionChunkShift;
         this.sectionChunkShift = regionSectionChunkShift;
@@ -322,20 +322,30 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
             ThreadedRegionSection<R, S> section = this.sections.get(sectionKey);
 
             List<ThreadedRegionSection<R, S>> newSections = new ArrayList<>();
+            final boolean sectionWasCreated;
+            final boolean sectionBecameNonEmpty;
 
             if (section == null) {
                 // no section at all
                 section = new ThreadedRegionSection<>(sectionX, sectionZ, this, chunkX, chunkZ);
                 this.sections.put(sectionKey, section);
                 newSections.add(section);
+                sectionWasCreated = true;
+                sectionBecameNonEmpty = true;
             } else {
-                section.addChunk(chunkX, chunkZ);
+                // Only run merge/adjacency logic when an empty buffer section gains its first chunk.
+                sectionWasCreated = false;
+                sectionBecameNonEmpty = section.addChunk(chunkX, chunkZ);
             }
-            // due to the fast check from above, we know the section is empty whether we needed to create it or not
+
+            if (!sectionWasCreated && !sectionBecameNonEmpty) {
+                return;
+            }
 
             // enforce the adjacency invariant by creating / updating neighbour sections
             final int createRadius = this.emptySectionCreateRadius;
-            final int searchRadius = createRadius + this.regionSectionMergeRadius;
+            final int mergeRadius = this.regionSectionMergeRadius;
+            final int searchRadius = Math.max(createRadius, mergeRadius);
             ReferenceOpenHashSet<ThreadedRegion<R, S>> nearbyRegions = null;
             for (int dx = -searchRadius; dx <= searchRadius; ++dx) {
                 for (int dz = -searchRadius; dz <= searchRadius; ++dz) {
@@ -344,6 +354,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                     }
                     final int squareDistance = Math.max(Math.abs(dx), Math.abs(dz));
                     final boolean inCreateRange = squareDistance <= createRadius;
+                    final boolean inMergeRange = squareDistance <= mergeRadius;
 
                     final int neighbourX = dx + sectionX;
                     final int neighbourZ = dz + sectionZ;
@@ -351,7 +362,8 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
 
                     ThreadedRegionSection<R, S> neighbourSection = this.sections.get(neighbourKey);
 
-                    if (neighbourSection != null) {
+                    // Only merge based on actual chunk ownership, not empty buffer sections.
+                    if (inMergeRange && neighbourSection != null && neighbourSection.chunkCount != 0) {
                         if (nearbyRegions == null) {
                             nearbyRegions = new ReferenceOpenHashSet<>(((searchRadius * 2 + 1) * (searchRadius * 2 + 1)) >> 1);
                         }
@@ -376,8 +388,18 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 }
             }
 
-            if (newSections.isEmpty()) {
-                // if we didn't add any sections, then we don't need to merge any regions or create a region
+            if (sectionBecameNonEmpty) {
+                final ThreadedRegion<R, S> owningRegion = section.getRegionPlain();
+                if (owningRegion != null) {
+                    if (nearbyRegions == null) {
+                        nearbyRegions = new ReferenceOpenHashSet<>(1);
+                    }
+                    nearbyRegions.add(owningRegion);
+                }
+            }
+
+            if (newSections.isEmpty() && nearbyRegions == null) {
+                // No new sections and no merge candidates.
                 return;
             }
 
@@ -806,6 +828,76 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                     }
                 }
                 return false;
+            } finally {
+                if (lock) {
+                    this.regioniser.regionLock.tryUnlockRead();
+                }
+            }
+        }
+
+        public int getOwnedChunkCount() {
+            final boolean lock = this.regioniser.writeLockOwner != Thread.currentThread();
+            if (lock) {
+                this.regioniser.regionLock.readLock();
+            }
+            try {
+                int total = 0;
+                for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
+                    total += section.chunkCount;
+                }
+                return total;
+            } finally {
+                if (lock) {
+                    this.regioniser.regionLock.tryUnlockRead();
+                }
+            }
+        }
+
+        public long[] getOwnedChunkArray() {
+            final boolean lock = this.regioniser.writeLockOwner != Thread.currentThread();
+            if (lock) {
+                this.regioniser.regionLock.readLock();
+            }
+            try {
+                int totalChunks = 0;
+                for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
+                    totalChunks += section.chunkCount;
+                }
+                if (totalChunks == 0) {
+                    return new long[0];
+                }
+
+                final long[] out = new long[totalChunks];
+                int index = 0;
+                for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
+                    if (section.chunkCount == 0) {
+                        continue;
+                    }
+
+                    final int shift = section.regionChunkShift;
+                    final int mask = section.regionChunkMask;
+                    final int offsetX = section.sectionX << shift;
+                    final int offsetZ = section.sectionZ << shift;
+
+                    final long[] bitset = section.chunksBitset;
+                    for (int arrIdx = 0, arrLen = bitset.length; arrIdx < arrLen; ++arrIdx) {
+                        long value = bitset[arrIdx];
+                        while (value != 0L) {
+                            final int valueIdx = Long.numberOfTrailingZeros(value);
+                            value ^= ca.spottedleaf.concurrentutil.util.IntegerUtil.getTrailingBit(value);
+
+                            final int bitIndex = valueIdx | (arrIdx << 6);
+                            final int localX = bitIndex & mask;
+                            final int localZ = (bitIndex >>> shift) & mask;
+
+                            out[index++] = CoordinateUtil.getChunkKey(localX | offsetX, localZ | offsetZ);
+                        }
+                    }
+                }
+                if (index != out.length) {
+                    return Arrays.copyOf(out, index);
+                }
+                return out;
             } finally {
                 if (lock) {
                     this.regioniser.regionLock.tryUnlockRead();

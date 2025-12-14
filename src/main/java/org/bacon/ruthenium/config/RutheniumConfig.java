@@ -94,8 +94,8 @@ public final class RutheniumConfig {
     public static final class Regionizer {
         public int recalculationSectionCount = 16;
         public double maxDeadSectionPercent = 0.20D;
-        public int emptySectionCreationRadius = 2;
-        public int mergeRadius = 2;
+        public int emptySectionCreationRadius = 1;
+        public int mergeRadius = 1;
         public int sectionChunkShift = 4;
     }
 
@@ -156,4 +156,3 @@ public final class RutheniumConfig {
         return Math.min(max, Math.max(min, value));
     }
 }
-

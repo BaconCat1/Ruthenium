@@ -64,12 +64,12 @@ public final class TickRegions implements ThreadedRegionizer.RegionCallbacks<Reg
         Objects.requireNonNull(region, "region");
         if (TickRegionScheduler.getInstance().isVerboseLogging()) {
             LOGGER.info("[VERBOSE] onRegionActive: region {} (sections={}, chunks={}, state={})",
-                region.id, region.getOwnedSections().size(), region.getOwnedChunks().size(), region.getStateForDebug());
+                region.id, region.getOwnedSections().size(), region.getOwnedChunkCount(), region.getStateForDebug());
         }
         if (RegionDebug.isEnabled(RegionDebug.LogCategory.LIFECYCLE)) {
             RegionDebug.log(RegionDebug.LogCategory.LIFECYCLE,
                 "Region {} became ACTIVE (sections={}, chunks={})", region.id,
-                region.getOwnedSections().size(), region.getOwnedChunks().size());
+                region.getOwnedSections().size(), region.getOwnedChunkCount());
         }
         this.scheduler.scheduleRegion(region.getData().getScheduleHandle());
     }
