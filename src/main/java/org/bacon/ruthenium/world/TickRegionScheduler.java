@@ -63,6 +63,40 @@ public final class TickRegionScheduler {
 
     private static volatile TickRegionScheduler INSTANCE;
 
+    /**
+     * Monotonic budget clock that can be paused to exclude time spent waiting (e.g. blocking).
+     * Package-private for unit tests.
+     */
+    static final class BudgetTimer {
+        private static final long NOT_PAUSED = Long.MIN_VALUE;
+
+        private long pausedAtNanos = NOT_PAUSED;
+        private long pausedDurationNanos;
+
+        public synchronized long nanoTime() {
+            if (this.pausedAtNanos != NOT_PAUSED) {
+                return this.pausedAtNanos - this.pausedDurationNanos;
+            }
+            return System.nanoTime() - this.pausedDurationNanos;
+        }
+
+        public synchronized void pause() {
+            if (this.pausedAtNanos != NOT_PAUSED) {
+                return;
+            }
+            this.pausedAtNanos = System.nanoTime();
+        }
+
+        public synchronized void resume() {
+            if (this.pausedAtNanos == NOT_PAUSED) {
+                return;
+            }
+            final long now = System.nanoTime();
+            this.pausedDurationNanos += Math.max(0L, now - this.pausedAtNanos);
+            this.pausedAtNanos = NOT_PAUSED;
+        }
+    }
+
     // Use SchedulerThreadPool from concurrentutil (same as Folia)
     @SuppressWarnings("deprecation")
     private final SchedulerThreadPool scheduler;
@@ -614,7 +648,7 @@ public final class TickRegionScheduler {
         final long tickStart = System.nanoTime();
 
         int processedTasks = 0;
-        processedTasks += runQueuedTasks(data, region, guard);
+        processedTasks += runQueuedTasks(data, region, tickView, guard);
 
         final MinecraftServer server = world.getServer();
         final int randomTickSpeed = server.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED);
@@ -722,7 +756,7 @@ public final class TickRegionScheduler {
             }
         }
 
-        processedTasks += runQueuedTasks(data, region, guard);
+        processedTasks += runQueuedTasks(data, region, tickView, guard);
         // Advance tick counters by tickCount to properly handle lag compensation
         // When a region is behind, tickCount > 1, so we advance by the appropriate amount
         for (int i = 0; i < tickCount; i++) {
@@ -924,6 +958,7 @@ public final class TickRegionScheduler {
 
     private int runQueuedTasks(final RegionTickData data,
                                 final ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region,
+                                final RegionizedWorldData tickView,
                                 final BooleanSupplier guard) {
         final RegionTaskQueue queue = data.getTaskQueue();
         final ServerWorld world = region.regioniser.world;
@@ -931,28 +966,37 @@ public final class TickRegionScheduler {
         int transferred = 0;
         boolean guardStoppedTasks = false;
 
-        while (true) {
-            if (!guard.getAsBoolean()) {
-                guardStoppedTasks = !queue.isEmpty();
-                break;
+        if (tickView != null) {
+            tickView.acquireChunkReadLock();
+        }
+        try {
+            while (true) {
+                if (!guard.getAsBoolean()) {
+                    guardStoppedTasks = !queue.isEmpty();
+                    break;
+                }
+                final RegionTaskQueue.RegionChunkTask task = queue.pollChunkTask();
+                if (task == null) {
+                    break;
+                }
+                if (!region.containsChunk(task.chunkX(), task.chunkZ())) {
+                    transferred++;
+                    LOGGER.debug("Transferring chunk task for {} from region {} because the chunk is no longer present",
+                        "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id);
+                    RegionTaskDispatcher.runOnChunk(world, task.chunkX(), task.chunkZ(), task.runnable());
+                    continue;
+                }
+                try {
+                    task.runnable().run();
+                    processed++;
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Chunk task for {} in region {} failed",
+                        "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id, throwable);
+                }
             }
-            final RegionTaskQueue.RegionChunkTask task = queue.pollChunkTask();
-            if (task == null) {
-                break;
-            }
-            if (!region.containsChunk(task.chunkX(), task.chunkZ())) {
-                transferred++;
-                LOGGER.debug("Transferring chunk task for {} from region {} because the chunk is no longer present",
-                    "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id);
-                RegionTaskDispatcher.runOnChunk(world, task.chunkX(), task.chunkZ(), task.runnable());
-                continue;
-            }
-            try {
-                task.runnable().run();
-                processed++;
-            } catch (final Throwable throwable) {
-                LOGGER.error("Chunk task for {} in region {} failed",
-                    "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id, throwable);
+        } finally {
+            if (tickView != null) {
+                tickView.releaseChunkReadLock();
             }
         }
         if (guardStoppedTasks) {
@@ -1704,7 +1748,10 @@ public final class TickRegionScheduler {
                 owningScheduler.enterRegionContext(this.region, world, this);
             }
             try {
-                owningScheduler.runQueuedTasks(this.data, this.region, guard);
+                final RegionizedWorldData tickView = world instanceof RegionizedServerWorld regionized
+                    ? regionized.ruthenium$getWorldRegionData()
+                    : null;
+                owningScheduler.runQueuedTasks(this.data, this.region, tickView, guard);
             } finally {
                 if (enteredContext) {
                     owningScheduler.exitRegionContext();

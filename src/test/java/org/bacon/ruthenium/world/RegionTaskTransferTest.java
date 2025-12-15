@@ -117,10 +117,11 @@ class RegionTaskTransferTest {
             "runQueuedTasks",
             RegionTickData.class,
             ThreadedRegionizer.ThreadedRegion.class,
+            RegionizedWorldData.class,
             BooleanSupplier.class
         );
         method.setAccessible(true);
-        return (int)method.invoke(scheduler, data, region, guard);
+        return (int)method.invoke(scheduler, data, region, null, guard);
     }
 
     private static ServerWorld createStubWorld() {
@@ -207,4 +208,3 @@ class RegionTaskTransferTest {
         }
     }
 }
-
