@@ -3,8 +3,13 @@ package org.bacon.ruthenium;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.ObserverBlock;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.world.chunk.WorldChunk;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bacon.ruthenium.command.RegionCommand;
@@ -54,6 +59,7 @@ public final class Ruthenium implements ModInitializer {
                 region.getData().addChunk(pos.x, pos.z);
                 LOGGER.debug("Registered chunk {} for region {} in world {}", pos, region.id, world.getRegistryKey().getValue());
             }
+            scheduleObserverResetTicks(world, chunk);
         });
 
         ServerChunkEvents.CHUNK_UNLOAD.register((world, chunk) -> {
@@ -118,6 +124,33 @@ public final class Ruthenium implements ModInitializer {
             throw new IllegalStateException("Server world " + world + " is missing Ruthenium region state mixin");
         }
         return regionized.ruthenium$getRegionizer();
+    }
+
+    private static void scheduleObserverResetTicks(final ServerWorld world, final WorldChunk chunk) {
+        final ChunkPos chunkPos = chunk.getPos();
+        final int startX = chunkPos.getStartX();
+        final int startZ = chunkPos.getStartZ();
+        final int endX = chunkPos.getEndX();
+        final int endZ = chunkPos.getEndZ();
+        final int bottomY = world.getBottomY();
+        final int topY = world.getTopYInclusive();
+        final BlockPos.Mutable cursor = new BlockPos.Mutable();
+
+        for (int y = bottomY; y <= topY; y++) {
+            for (int z = startZ; z <= endZ; z++) {
+                for (int x = startX; x <= endX; x++) {
+                    cursor.set(x, y, z);
+                    final BlockState state = chunk.getBlockState(cursor);
+                    if (!state.isOf(Blocks.OBSERVER)) {
+                        continue;
+                    }
+                    if (!state.contains(ObserverBlock.POWERED) || !state.get(ObserverBlock.POWERED)) {
+                        continue;
+                    }
+                    world.scheduleBlockTick(cursor, state.getBlock(), 2);
+                }
+            }
+        }
     }
 
     private static TickRegions createDefaultRegionCallbacks() {

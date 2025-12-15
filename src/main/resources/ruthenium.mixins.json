@@ -25,6 +25,7 @@
     "WorldTickSchedulerMixin",
     "ChunkTickSchedulerMixin",
     "ServerChunkLoadingManagerThreadSafetyMixin",
+    "ServerChunkManagerBroadcastSetThreadSafetyMixin",
     "ServerChunkLoadingManagerEntityTrackerListenersThreadSafetyMixin",
     "ServerPlayNetworkHandlerMixin",
     "accessor.ServerWorldAccessor",

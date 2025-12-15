@@ -1,5 +1,7 @@
 package org.bacon.ruthenium.world;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
@@ -33,6 +35,7 @@ import net.minecraft.util.profiler.Profilers;
 import net.minecraft.village.raid.RaidManager;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
+import net.minecraft.world.tick.OrderedTick;
 import net.minecraft.world.tick.WorldTickScheduler;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkLoadingManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
@@ -53,6 +56,10 @@ public class RegionizedWorldData {
     private final Object chunkLock = new Object();
     private final LongSet tickingChunks = new LongOpenHashSet();
     private final LongSet entityTickingChunks = new LongOpenHashSet();
+    private final LongSet scheduledBlockTickChunks = new LongOpenHashSet();
+    private final LongSet scheduledFluidTickChunks = new LongOpenHashSet();
+    private final Long2ObjectOpenHashMap<List<OrderedTick<Block>>> scheduledBlockTicks = new Long2ObjectOpenHashMap<>();
+    private final Long2ObjectOpenHashMap<List<OrderedTick<Fluid>>> scheduledFluidTicks = new Long2ObjectOpenHashMap<>();
     private volatile boolean handlingTick;
     private volatile boolean tickAllowed;
     private volatile long lagCompensationTick;
@@ -62,9 +69,19 @@ public class RegionizedWorldData {
     private int wakeupInactiveRemainingMonsters;
     private int wakeupInactiveRemainingVillagers;
     private final Object2LongMap<String> budgetWarningTicks = new Object2LongOpenHashMap<>();
+    private int catSpawnerNextTick;
+    private int patrolSpawnerNextTick;
+    private int phantomSpawnerNextTick;
+    private int wanderingTraderTickDelay = Integer.MIN_VALUE;
+    private int wanderingTraderSpawnDelay;
+    private int wanderingTraderSpawnChance;
+    private Object lastSpawnState;
 
     private final List<ServerPlayerEntity> players = new ArrayList<>();
     private final List<Entity> entities = new ArrayList<>();
+    private final NearbyPlayers nearbyPlayers;
+    private final PositionCountingAreaMap<ServerPlayerEntity> spawnChunkTracker;
+    private final PositionCountingAreaMap<ServerPlayerEntity> narrowSpawnChunkTracker;
 
     // Block event queue (note blocks, comparator updates, etc.)
     private final ObjectLinkedOpenHashSet<BlockEventData> blockEvents = new ObjectLinkedOpenHashSet<>();
@@ -101,6 +118,9 @@ public class RegionizedWorldData {
     public RegionizedWorldData(final ServerWorld world) {
         this.world = Objects.requireNonNull(world, "world");
         this.redstoneGameTime = world.getTime();
+        this.nearbyPlayers = new NearbyPlayers(world);
+        this.spawnChunkTracker = new PositionCountingAreaMap<>();
+        this.narrowSpawnChunkTracker = new PositionCountingAreaMap<>();
         this.budgetWarningTicks.defaultReturnValue(Long.MIN_VALUE);
     }
 
@@ -449,11 +469,18 @@ public class RegionizedWorldData {
     }
 
     public void addPlayer(final ServerPlayerEntity player) {
-        this.players.add(player);
+        if (!this.players.contains(player)) {
+            this.players.add(player);
+            this.nearbyPlayers.addPlayer(player);
+            this.addPlayerToSpawnTrackers(player);
+        }
     }
 
     public void removePlayer(final ServerPlayerEntity player) {
-        this.players.remove(player);
+        if (this.players.remove(player)) {
+            this.nearbyPlayers.removePlayer(player);
+            this.removePlayerFromSpawnTrackers(player);
+        }
     }
 
     public void addEntity(final Entity entity) {
@@ -462,6 +489,38 @@ public class RegionizedWorldData {
 
     public void removeEntity(final Entity entity) {
         this.entities.remove(entity);
+    }
+
+    private void addPlayerToSpawnTrackers(final ServerPlayerEntity player) {
+        final ChunkPos chunkPos = player.getChunkPos();
+        this.spawnChunkTracker.add(player, chunkPos.x, chunkPos.z, ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE);
+        this.narrowSpawnChunkTracker.add(player, chunkPos.x, chunkPos.z, ChunkTickConstants.NARROW_SPAWN_TRACK_RANGE);
+    }
+
+    private void removePlayerFromSpawnTrackers(final ServerPlayerEntity player) {
+        this.spawnChunkTracker.remove(player);
+        this.narrowSpawnChunkTracker.remove(player);
+    }
+
+    public void updatePlayerTrackingPosition(final ServerPlayerEntity player) {
+        final ChunkPos chunkPos = player.getChunkPos();
+        this.spawnChunkTracker.addOrUpdate(player, chunkPos.x, chunkPos.z, ChunkTickConstants.PLAYER_SPAWN_TRACK_RANGE);
+        this.narrowSpawnChunkTracker.addOrUpdate(player, chunkPos.x, chunkPos.z, ChunkTickConstants.NARROW_SPAWN_TRACK_RANGE);
+        this.nearbyPlayers.tickPlayer(player);
+    }
+
+    public NearbyPlayers getNearbyPlayers() {
+        return this.nearbyPlayers;
+    }
+
+    private void rebuildPlayerTrackers() {
+        this.nearbyPlayers.clear();
+        this.spawnChunkTracker.clear();
+        this.narrowSpawnChunkTracker.clear();
+        for (final ServerPlayerEntity player : this.players) {
+            this.nearbyPlayers.addPlayer(player);
+            this.addPlayerToSpawnTrackers(player);
+        }
     }
 
     public void merge(final RegionizedWorldData other) {
@@ -483,6 +542,23 @@ public class RegionizedWorldData {
         }
         for (final BlockEntityTickInvoker ticker : other.pendingBlockEntityTickers) {
             this.addBlockEntityTicker(ticker);
+        }
+
+        this.rebuildPlayerTrackers();
+        this.scheduledBlockTickChunks.addAll(other.scheduledBlockTickChunks);
+        this.scheduledFluidTickChunks.addAll(other.scheduledFluidTickChunks);
+        absorbScheduledTickLists(this.scheduledBlockTicks, other.scheduledBlockTicks);
+        absorbScheduledTickLists(this.scheduledFluidTicks, other.scheduledFluidTicks);
+        this.catSpawnerNextTick = Math.max(this.catSpawnerNextTick, other.catSpawnerNextTick);
+        this.patrolSpawnerNextTick = Math.max(this.patrolSpawnerNextTick, other.patrolSpawnerNextTick);
+        this.phantomSpawnerNextTick = Math.max(this.phantomSpawnerNextTick, other.phantomSpawnerNextTick);
+        if (other.wanderingTraderTickDelay > this.wanderingTraderTickDelay) {
+            this.wanderingTraderTickDelay = other.wanderingTraderTickDelay;
+        }
+        this.wanderingTraderSpawnDelay = Math.max(this.wanderingTraderSpawnDelay, other.wanderingTraderSpawnDelay);
+        this.wanderingTraderSpawnChance = Math.max(this.wanderingTraderSpawnChance, other.wanderingTraderSpawnChance);
+        if (other.lastSpawnState != null) {
+            this.lastSpawnState = other.lastSpawnState;
         }
     }
 
@@ -548,14 +624,47 @@ public class RegionizedWorldData {
                 }
             }
 
+            final LongIterator scheduledBlockIterator = this.scheduledBlockTickChunks.iterator();
+            while (scheduledBlockIterator.hasNext()) {
+                final long chunkKey = scheduledBlockIterator.nextLong();
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.scheduledBlockTickChunks.add(chunkKey);
+                    moveScheduledTickList(chunkKey, this.scheduledBlockTicks, target.scheduledBlockTicks);
+                }
+            }
+
+            final LongIterator scheduledFluidIterator = this.scheduledFluidTickChunks.iterator();
+            while (scheduledFluidIterator.hasNext()) {
+                final long chunkKey = scheduledFluidIterator.nextLong();
+                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                final long regionKey = CoordinateUtil.getChunkKey(chunkX >> chunkToRegionShift, chunkZ >> chunkToRegionShift);
+                final RegionizedWorldData target = regionToData.get(regionKey);
+                if (target != null) {
+                    target.scheduledFluidTickChunks.add(chunkKey);
+                    moveScheduledTickList(chunkKey, this.scheduledFluidTicks, target.scheduledFluidTicks);
+                }
+            }
+
             // Clear source data
             this.tickingChunks.clear();
             this.entityTickingChunks.clear();
+            this.scheduledBlockTickChunks.clear();
+            this.scheduledFluidTickChunks.clear();
+            this.scheduledBlockTicks.clear();
+            this.scheduledFluidTicks.clear();
         }
 
         // Clear player and entity lists
         this.players.clear();
         this.entities.clear();
+        this.nearbyPlayers.clear();
+        this.spawnChunkTracker.clear();
+        this.narrowSpawnChunkTracker.clear();
 
         // Distribute block events by position
         synchronized (this.blockEventsLock) {
@@ -603,6 +712,23 @@ public class RegionizedWorldData {
             this.pendingBlockEntityTickers.clear();
             this.blockEntityTickerSet.clear();
         }
+
+        for (final RegionizedWorldData regionData : dataSet) {
+            regionData.catSpawnerNextTick = this.catSpawnerNextTick;
+            regionData.patrolSpawnerNextTick = this.patrolSpawnerNextTick;
+            regionData.phantomSpawnerNextTick = this.phantomSpawnerNextTick;
+            regionData.wanderingTraderTickDelay = this.wanderingTraderTickDelay;
+            regionData.wanderingTraderSpawnDelay = this.wanderingTraderSpawnDelay;
+            regionData.wanderingTraderSpawnChance = this.wanderingTraderSpawnChance;
+            regionData.lastSpawnState = this.lastSpawnState;
+        }
+        this.catSpawnerNextTick = 0;
+        this.patrolSpawnerNextTick = 0;
+        this.phantomSpawnerNextTick = 0;
+        this.wanderingTraderTickDelay = Integer.MIN_VALUE;
+        this.wanderingTraderSpawnDelay = 0;
+        this.wanderingTraderSpawnChance = 0;
+        this.lastSpawnState = null;
     }
 
     /**
@@ -726,6 +852,64 @@ public class RegionizedWorldData {
                 this.entityTickingChunks.remove(CoordinateUtil.getChunkKey(pos.x, pos.z));
             }
         }
+    }
+
+    public void registerScheduledBlockTick(final int chunkX,
+                                           final int chunkZ,
+                                           final OrderedTick<Block> tick) {
+        final long chunkKey = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        this.trackScheduledTick(this.scheduledBlockTicks, chunkKey, tick);
+        this.scheduledBlockTickChunks.add(chunkKey);
+    }
+
+    public void registerScheduledFluidTick(final int chunkX,
+                                           final int chunkZ,
+                                           final OrderedTick<Fluid> tick) {
+        final long chunkKey = CoordinateUtil.getChunkKey(chunkX, chunkZ);
+        this.trackScheduledTick(this.scheduledFluidTicks, chunkKey, tick);
+        this.scheduledFluidTickChunks.add(chunkKey);
+    }
+
+    public List<OrderedTick<Block>> getScheduledBlockTicks(final long chunkKey) {
+        return this.scheduledBlockTicks.get(chunkKey);
+    }
+
+    public List<OrderedTick<Fluid>> getScheduledFluidTicks(final long chunkKey) {
+        return this.scheduledFluidTicks.get(chunkKey);
+    }
+
+    public LongSet snapshotScheduledBlockTickChunks() {
+        return new LongOpenHashSet(this.scheduledBlockTickChunks);
+    }
+
+    public LongSet snapshotScheduledFluidTickChunks() {
+        return new LongOpenHashSet(this.scheduledFluidTickChunks);
+    }
+
+    private <T> void trackScheduledTick(final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target,
+                                        final long chunkKey,
+                                        final OrderedTick<T> tick) {
+        final List<OrderedTick<T>> list = target.computeIfAbsent(chunkKey, key -> new ArrayList<>());
+        list.add(tick);
+    }
+
+    private static <T> void absorbScheduledTickLists(final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target,
+                                                     final Long2ObjectOpenHashMap<List<OrderedTick<T>>> source) {
+        for (final Long2ObjectMap.Entry<List<OrderedTick<T>>> entry : source.long2ObjectEntrySet()) {
+            final List<OrderedTick<T>> list = target.computeIfAbsent(entry.getLongKey(), key -> new ArrayList<>());
+            list.addAll(entry.getValue());
+        }
+    }
+
+    private static <T> void moveScheduledTickList(final long chunkKey,
+                                                  final Long2ObjectOpenHashMap<List<OrderedTick<T>>> source,
+                                                  final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target) {
+        final List<OrderedTick<T>> list = source.remove(chunkKey);
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        final List<OrderedTick<T>> merged = target.computeIfAbsent(chunkKey, key -> new ArrayList<>());
+        merged.addAll(list);
     }
 
     // ========== Block Event Queue Methods ==========
