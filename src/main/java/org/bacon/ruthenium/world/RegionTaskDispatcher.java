@@ -50,12 +50,13 @@ public final class RegionTaskDispatcher {
             return true;
         }
 
-        final RegionTickData data = region.getData();
-        if (!data.containsChunk(chunkX, chunkZ)) {
+        if (!region.containsChunk(chunkX, chunkZ)) {
             queuePendingChunkTask(world, chunkX, chunkZ, task);
-            LOGGER.debug("Queued pending chunk task for chunk ({}, {}) (chunk not registered yet)", chunkX, chunkZ);
+            LOGGER.debug("Queued pending chunk task for chunk ({}, {}) (chunk not owned yet)", chunkX, chunkZ);
             return true;
         }
+
+        final RegionTickData data = region.getData();
         data.getTaskQueue().queueChunkTask(chunkX, chunkZ, task);
         TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
         return true;
@@ -82,8 +83,8 @@ public final class RegionTaskDispatcher {
             return;
         }
 
-        final LongIterator iterator = region.getData().getChunks().iterator();
-        final long chunkKey = iterator.hasNext() ? iterator.nextLong() : 0L;
+        final long[] ownedChunks = region.getOwnedChunkArray();
+        final long chunkKey = ownedChunks.length > 0 ? ownedChunks[0] : 0L;
         final RegionTickData data = region.getData();
         data.getTaskQueue().queueChunkTask(RegionTickData.decodeChunkX(chunkKey), RegionTickData.decodeChunkZ(chunkKey), runnable);
         TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());

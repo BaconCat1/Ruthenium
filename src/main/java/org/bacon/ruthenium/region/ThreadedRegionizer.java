@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.StampedLock;
 import java.util.function.BooleanSupplier;
@@ -810,6 +809,36 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         }
 
         /**
+         * Fast membership check for whether this region currently owns the given chunk.
+         *
+         * <p>This is intended for hot paths (thread-ownership checks, update suppression, etc)
+         * and is significantly cheaper than allocating {@link #getOwnedChunks()}.
+         */
+        public boolean containsChunk(final int chunkX, final int chunkZ) {
+            final boolean lock = this.regioniser.writeLockOwner != Thread.currentThread();
+            if (lock) {
+                this.regioniser.regionLock.readLock();
+            }
+            try {
+                final int sectionX = chunkX >> this.regioniser.sectionChunkShift;
+                final int sectionZ = chunkZ >> this.regioniser.sectionChunkShift;
+                final ThreadedRegionSection<R, S> section = this.sectionByKey.get(CoordinateUtil.getChunkKey(sectionX, sectionZ));
+                if (section == null) {
+                    return false;
+                }
+
+                final int mask = this.regioniser.regionSectionChunkSize - 1;
+                final int shift = this.regioniser.sectionChunkShift;
+                final int index = (chunkX & mask) | ((chunkZ & mask) << shift);
+                return (section.chunksBitset[index >>> 6] & (1L << (index & (Long.SIZE - 1)))) != 0L;
+            } finally {
+                if (lock) {
+                    this.regioniser.regionLock.tryUnlockRead();
+                }
+            }
+        }
+
+        /**
          * Fast check to determine if this region contains any chunks.
          * This method does not allocate and is safe to call from hot paths.
          * Should be called while holding the regionizer read lock.
@@ -859,9 +888,14 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 this.regioniser.regionLock.readLock();
             }
             try {
+                // Derive the total from the bitsets (source of truth). Do NOT rely on section.chunkCount here.
+                // If chunkCount ever desynchronizes from the bitset, this method must not crash the scheduler.
                 int totalChunks = 0;
                 for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
-                    totalChunks += section.chunkCount;
+                    final long[] bitset = section.chunksBitset;
+                    for (int arrIdx = 0, arrLen = bitset.length; arrIdx < arrLen; ++arrIdx) {
+                        totalChunks += Long.bitCount(bitset[arrIdx]);
+                    }
                 }
                 if (totalChunks == 0) {
                     return new long[0];
@@ -870,10 +904,6 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                 final long[] out = new long[totalChunks];
                 int index = 0;
                 for (final ThreadedRegionSection<R, S> section : this.sectionByKey.values()) {
-                    if (section.chunkCount == 0) {
-                        continue;
-                    }
-
                     final int shift = section.regionChunkShift;
                     final int mask = section.regionChunkMask;
                     final int offsetX = section.sectionX << shift;
@@ -890,7 +920,12 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
                             final int localX = bitIndex & mask;
                             final int localZ = (bitIndex >>> shift) & mask;
 
-                            out[index++] = CoordinateUtil.getChunkKey(localX | offsetX, localZ | offsetZ);
+                            // Defensive: even with a popcount-based allocation, never allow this to throw.
+                            if (index < out.length) {
+                                out[index++] = CoordinateUtil.getChunkKey(localX | offsetX, localZ | offsetZ);
+                            } else {
+                                return Arrays.copyOf(out, index);
+                            }
                         }
                     }
                 }
@@ -1208,6 +1243,7 @@ public final class ThreadedRegionizer<R extends ThreadedRegionizer.ThreadedRegio
         private int chunkCount;
         private int nonEmptyNeighbours;
 
+        @SuppressWarnings("unused")
         private ThreadedRegion<R, S> region;
         private static final VarHandle REGION_HANDLE = ConcurrentUtil.getVarHandle(ThreadedRegionSection.class, "region", ThreadedRegion.class);
 

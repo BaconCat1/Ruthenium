@@ -243,7 +243,7 @@ public final class TickRegionScheduler {
                     this.buildDiagnostics(world, "after-drain",
                         System.nanoTime() - tickStart));
             }
-            this.logBudgetAbortIfExceeded(world, shouldKeepTicking, "after-drain");
+            this.logBudgetAbortIfExceeded(world, orchestratorGuard, "after-drain");
             worldData.populateChunkState(shouldKeepTicking);
             final boolean hasActiveRegions = this.hasActiveRegions(world);
             if (!hasActiveRegions) {
@@ -629,23 +629,39 @@ public final class TickRegionScheduler {
         boolean chunkLoopAborted = false;
 
         // Acquire read lock to prevent main thread from broadcasting chunk data while we're ticking
+        final int totalChunks = chunkSnapshot.length;
+        int cursor = 0;
+        if (totalChunks > 0) {
+            cursor = data.getChunkTickCursor() % totalChunks;
+            if (cursor < 0) {
+                cursor += totalChunks;
+            }
+        } else {
+            data.setChunkTickCursor(0);
+        }
+
+        int iteratedChunks = 0;
         tickView.acquireChunkReadLock();
         try {
-            for (int i = 0; i < chunkSnapshot.length; ++i) {
+            for (int offset = 0; offset < totalChunks; ++offset) {
                 if (!guard.getAsBoolean()) {
-                    chunkLoopAborted = i < chunkSnapshot.length;
+                    chunkLoopAborted = true;
                     break;
                 }
+
+                final int i = cursor + offset < totalChunks ? cursor + offset : (cursor + offset) - totalChunks;
                 final long chunkKey = chunkSnapshot[i];
                 final int chunkX = CoordinateUtil.getChunkX(chunkKey);
                 final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
                 // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
                 if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
+                    iteratedChunks++;
                     continue;
                 }
                 final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
                 if (worldChunk == null) {
                     skippedNotFull++;
+                    iteratedChunks++;
                     continue;
                 }
 
@@ -659,12 +675,18 @@ public final class TickRegionScheduler {
                 } finally {
                     ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
                 }
+
+                iteratedChunks++;
             }
         } finally {
             tickView.releaseChunkReadLock();
         }
+
+        if (totalChunks > 0) {
+            data.setChunkTickCursor(cursor + iteratedChunks);
+        }
         if (chunkLoopAborted) {
-            this.logRegionChunkAbort(world, region, tickedChunks, chunkSnapshot.length);
+            this.logRegionChunkAbort(world, region, tickedChunks, totalChunks);
         }
 
         // Tick block entities for this region
@@ -918,7 +940,7 @@ public final class TickRegionScheduler {
             if (task == null) {
                 break;
             }
-            if (!data.containsChunk(task.chunkX(), task.chunkZ())) {
+            if (!region.containsChunk(task.chunkX(), task.chunkZ())) {
                 transferred++;
                 LOGGER.debug("Transferring chunk task for {} from region {} because the chunk is no longer present",
                     "(" + task.chunkX() + ", " + task.chunkZ() + ")", region.id);

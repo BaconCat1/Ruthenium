@@ -30,6 +30,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
     private TickRegionScheduler.RegionScheduleHandle scheduleHandle;
     private long currentTick;
     private long redstoneTick;
+    private int chunkTickCursor;
     private final LongSet chunks = new LongOpenHashSet();
     private final RegionTaskQueue taskQueue = new RegionTaskQueue();
     private final RegionizedWorldData worldData;
@@ -68,6 +69,14 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         return this.redstoneTick;
     }
 
+    public int getChunkTickCursor() {
+        return this.chunkTickCursor;
+    }
+
+    public void setChunkTickCursor(final int chunkTickCursor) {
+        this.chunkTickCursor = chunkTickCursor;
+    }
+
     /**
      * Advances the current tick counter by one.
      */
@@ -102,6 +111,8 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         this.worldData.merge(other.worldData);
         this.currentTick = Math.max(this.currentTick, other.currentTick);
         this.redstoneTick = Math.max(this.redstoneTick, other.redstoneTick);
+        // Keep the most advanced cursor so we don't regress fairness after merges.
+        this.chunkTickCursor = Math.max(this.chunkTickCursor, other.chunkTickCursor);
         this.chunks.addAll(other.chunks);
         this.taskQueue.absorb(other.taskQueue);
     }
@@ -115,6 +126,7 @@ public final class RegionTickData implements ThreadedRegionizer.ThreadedRegionDa
         final RegionTickData copy = new RegionTickData(this.scheduler, this.worldData.getWorld());
         copy.currentTick = this.currentTick;
         copy.redstoneTick = this.redstoneTick;
+        copy.chunkTickCursor = this.chunkTickCursor;
         copy.chunks.addAll(this.chunks);
         this.taskQueue.copyInto(copy.taskQueue);
         return copy;

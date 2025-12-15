@@ -7,7 +7,6 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.ChunkPos;
-import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;

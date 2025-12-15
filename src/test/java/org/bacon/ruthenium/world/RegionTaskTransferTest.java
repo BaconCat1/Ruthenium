@@ -29,12 +29,13 @@ class RegionTaskTransferTest {
             createRegionizer(world);
         installRegionizer(world, regionizer);
 
+        final AtomicBoolean ran = new AtomicBoolean(false);
+        RegionTaskDispatcher.runOnChunk(world, 0, 0, () -> ran.set(true));
+
+        // No region/chunk exists yet, so the task must be held pending.
         regionizer.addChunk(0, 0);
         final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region =
             requireRegion(regionizer, 0, 0);
-
-        final AtomicBoolean ran = new AtomicBoolean(false);
-        RegionTaskDispatcher.runOnChunk(world, 0, 0, () -> ran.set(true));
 
         Assertions.assertFalse(region.getData().getTaskQueue().containsTask(0, 0),
             "Task should be held pending until the chunk is registered");
@@ -48,6 +49,29 @@ class RegionTaskTransferTest {
         Assertions.assertNotNull(task, "Expected flushed task to be available");
         task.runnable().run();
         Assertions.assertTrue(ran.get(), "Flushed task should execute");
+    }
+
+    @Test
+    void runOnChunkQueuesImmediatelyWhenChunkOwnedByRegion() throws Exception {
+        final ServerWorld world = createStubWorld();
+        final ThreadedRegionizer<RegionTickData, RegionTickData.RegionSectionData> regionizer =
+            createRegionizer(world);
+        installRegionizer(world, regionizer);
+
+        regionizer.addChunk(0, 0);
+        final ThreadedRegionizer.ThreadedRegion<RegionTickData, RegionTickData.RegionSectionData> region =
+            requireRegion(regionizer, 0, 0);
+
+        final AtomicBoolean ran = new AtomicBoolean(false);
+        RegionTaskDispatcher.runOnChunk(world, 0, 0, () -> ran.set(true));
+
+        Assertions.assertTrue(region.getData().getTaskQueue().containsTask(0, 0),
+            "Task should queue immediately when the regionizer already owns the chunk");
+
+        final var task = region.getData().getTaskQueue().pollChunkTask();
+        Assertions.assertNotNull(task, "Expected queued task to be available");
+        task.runnable().run();
+        Assertions.assertTrue(ran.get(), "Queued task should execute");
     }
 
     @Test

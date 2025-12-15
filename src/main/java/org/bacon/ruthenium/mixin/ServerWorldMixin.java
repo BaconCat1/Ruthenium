@@ -184,13 +184,21 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private void ruthenium$redirectAddBlockEvent(final BlockPos pos, final Block block,
                                                   final int eventId, final int eventParam,
                                                   final CallbackInfo ci) {
-        if (!RegionizedServer.isOnRegionThread()) {
-            return; // Fall back to vanilla if not on region thread
+        final boolean onRegionThread = RegionizedServer.isOnRegionThread();
+        // If the scheduler is actively handling this world, vanilla's block event list will never
+        // be processed (because the vanilla world tick is cancelled). In that case we MUST route
+        // events to region threads, even if the call originates from the main thread.
+        if (!onRegionThread) {
+            final TickRegionScheduler scheduler = TickRegionScheduler.getInstance();
+            final RegionizedWorldData worldData = this.ruthenium$getWorldRegionData();
+            if (!worldData.isHandlingTick() && !scheduler.hasActiveRegions(this.ruthenium$self())) {
+                return; // allow vanilla when regions are inactive
+            }
         }
 
         final int chunkX = pos.getX() >> 4;
         final int chunkZ = pos.getZ() >> 4;
-        if (this.ruthenium$self() instanceof RegionizedServerWorld regionized &&
+        if (onRegionThread && this.ruthenium$self() instanceof RegionizedServerWorld regionized &&
             !regionized.ruthenium$isOwnedByCurrentRegion(chunkX, chunkZ)) {
             RegionTaskDispatcher.runOnChunk(this.ruthenium$self(), chunkX, chunkZ, () -> {
                 final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
@@ -202,11 +210,21 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             return;
         }
 
-        final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
-        if (worldData == null) {
+        // If we're not currently inside a region tick, or we're on the main thread, queue it to
+        // the correct region via the dispatcher.
+        final RegionizedWorldData currentWorldData = TickRegionScheduler.getCurrentWorldData();
+        if (!onRegionThread || currentWorldData == null) {
+            RegionTaskDispatcher.runOnChunk(this.ruthenium$self(), chunkX, chunkZ, () -> {
+                final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+                if (worldData != null) {
+                    worldData.pushBlockEvent(pos, block, eventId, eventParam);
+                }
+            });
+            ci.cancel();
             return;
         }
-        worldData.pushBlockEvent(pos, block, eventId, eventParam);
+
+        currentWorldData.pushBlockEvent(pos, block, eventId, eventParam);
         ci.cancel();
     }
 
@@ -232,7 +250,6 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     @Unique
     @SuppressWarnings("resource")
     private void ruthenium$runEntityManagementPhase() {
-        final ServerWorld world = this.ruthenium$self();
         ((ServerWorldAccessor)this).ruthenium$getEntityManager().tick();
     }
 }

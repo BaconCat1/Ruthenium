@@ -1,5 +1,26 @@
 # Ruthenium TODO
 
+## Folia Parity Checklist
+
+### Completed
+- [x] **Block events region ownership** (note blocks, synced block events): forward to owning region thread.
+- [x] **Prevent cross-region neighbor updates (Folia patch 0004, partial):**
+  - [x] Guard `World.updateNeighbor` + related neighbor update entry points.
+  - [x] Guard `NeighborUpdater.tryNeighborUpdate` and `NeighborUpdater.replaceWithStateForNeighborUpdate`.
+  - [x] Ensure guards do not trigger chunk loads from region threads (only allow if chunk is already loaded).
+  - [x] Guard additional direct neighbor reads in vanilla implementations:
+    - [x] `DetectorRailBlock.updateNearbyRails` neighbor state reads.
+    - [x] `PoweredRailBlock.isPoweredByOtherRails` recursion base case.
+    - [x] `RedstoneController.calculateWirePowerAt` neighbor state reads.
+    - [x] `World.updateComparators` (output-signal/comparator updates) neighbor reads.
+    - [x] `AbstractRedstoneGateBlock` (repeaters, gates) neighbor state reads.
+    - [x] `ComparatorBlock.calculateOutputSignal` / `ComparatorBlock.update` neighbor reads.
+    - [x] `PistonHandler` block-state reads during push calculation.
+
+### Needed (Parity Targets)
+- [ ] **Folia patch 0004 remainder:** guard additional redstone/physics call sites that directly read/update neighbors without going through `World`/`NeighborUpdater` entry points.
+- [ ] **Folia patch 0005+ series:** audit and port remaining thread-safety / access guards as needed for full parity.
+
 ## Main Thread Decoupling - Critical Path
 
 ### 0. Foundation (Core Infrastructure)

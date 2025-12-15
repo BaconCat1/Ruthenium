@@ -81,8 +81,11 @@ public class RegionizedWorldData {
      * Region threads acquire read lock during chunk ticking (allows parallel ticking).
      * Main thread acquires write lock before broadcasting updates (blocks until regions complete).
      */
-    private final ReentrantReadWriteLock chunkAccessLock = new ReentrantReadWriteLock();
-    private static final long CHUNK_LOCK_TIMEOUT_MILLIS = 50L;
+    // Use a fair RW lock to prevent the main-thread writer (broadcastUpdates) from being
+    // starved by continuous region-thread reads. Starvation here manifests as client desync
+    // (e.g. temporary invisible/ghost blocks during rapid piston toggles).
+    private final ReentrantReadWriteLock chunkAccessLock = new ReentrantReadWriteLock(true);
+    private static final long CHUNK_WRITE_LOCK_WARN_MILLIS = 50L;
 
     /**
      * Counter for active region threads currently ticking chunks.
@@ -370,32 +373,29 @@ public class RegionizedWorldData {
      * Multiple region threads can hold the read lock simultaneously for parallel ticking.
      */
     public void acquireChunkReadLock() {
-        this.activeRegionThreads.incrementAndGet();
         this.chunkAccessLock.readLock().lock();
+        this.activeRegionThreads.incrementAndGet();
     }
 
     /**
      * Releases the read lock for chunk access. Region threads call this after ticking chunks.
      */
     public void releaseChunkReadLock() {
-        this.chunkAccessLock.readLock().unlock();
         this.activeRegionThreads.decrementAndGet();
+        this.chunkAccessLock.readLock().unlock();
     }
 
     /**
-     * Attempts to acquire the write lock for chunk access with a timeout.
+     * Acquires the write lock for chunk access.
      * Main thread calls this before broadcasting chunk updates to players.
      * This blocks until all region threads release their read locks.
-     *
-     * @return {@code true} if the lock was acquired, {@code false} if timeout was reached
      */
-    public boolean tryAcquireChunkWriteLock() {
-        try {
-            return this.chunkAccessLock.writeLock().tryLock(CHUNK_LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
-        } catch (final InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOGGER.warn("Interrupted while waiting for chunk write lock", e);
-            return false;
+    public void acquireChunkWriteLock() {
+        final long startNanos = System.nanoTime();
+        this.chunkAccessLock.writeLock().lock();
+        final long waitedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        if (waitedMillis >= CHUNK_WRITE_LOCK_WARN_MILLIS) {
+            LOGGER.debug("Waited {}ms for chunk write lock in world {}", waitedMillis, this.world.getRegistryKey().getValue());
         }
     }
 
@@ -625,23 +625,18 @@ public class RegionizedWorldData {
          * broadcastUpdates() reads PalettedContainer data to send chunk updates to players.
          * We must acquire the write lock to ensure no region threads are modifying chunks.
          */
-        if (this.tryAcquireChunkWriteLock()) {
-            try {
-                ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
-                ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
-                if (!this.world.isDebugWorld()) {
-                    ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
-                    ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
-                }
-                ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
-                ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();
-            } finally {
-                this.releaseChunkWriteLock();
+        this.acquireChunkWriteLock();
+        try {
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeUpdateChunks();
+            if (!this.world.isDebugWorld()) {
+                ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
+                ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTickEntityMovement();
             }
-        } else {
-            // Could not acquire lock - skip broadcast this tick to avoid blocking
-            LOGGER.debug("Skipped chunk updates for {} - region threads are still ticking chunks",
-                this.world.getRegistryKey().getValue());
+            ((ServerChunkLoadingManagerAccessor)loadingManager).ruthenium$invokeTick(shouldKeepTicking);
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeInitChunkCaches();
+        } finally {
+            this.releaseChunkWriteLock();
         }
 
         final LongOpenHashSet newTicking = new LongOpenHashSet();
@@ -707,6 +702,7 @@ public class RegionizedWorldData {
         ((ServerWorldAccessor)this.world).ruthenium$invokeTickTime();
     }
 
+    @SuppressWarnings("unused")
     private void tickScheduledTickSchedulers() {
         if (this.world.isDebugWorld()) {
             return;
@@ -811,14 +807,65 @@ public class RegionizedWorldData {
      * Mirrors Folia's runBlockEvents() implementation.
      */
     public void processBlockEvents() {
+        // Block events are stored per-region, but the authoritative "should tick blocks" snapshot
+        // is maintained on the world-scoped RegionizedWorldData instance refreshed by the main-thread
+        // orchestrator (see TickRegionScheduler.tickWorld()). Use that snapshot for gating.
+        final RegionizedWorldData tickView = this.world instanceof RegionizedServerWorld regionized
+            ? regionized.ruthenium$getWorldRegionData()
+            : this;
         final List<BlockEventData> toReschedule = new ArrayList<>(64);
 
         synchronized (this.blockEventsLock) {
             while (!this.blockEvents.isEmpty()) {
                 final BlockEventData event = this.blockEvents.removeFirst();
-                if (this.shouldTickBlocksInChunk(event.chunkX(), event.chunkZ())) {
+
+                final int chunkX = event.chunkX();
+                final int chunkZ = event.chunkZ();
+
+                if (!RegionThreadUtil.ownsChunk(this.world, chunkX, chunkZ)) {
+                    // Hand the event to the region that owns this chunk instead of looping forever locally
+                    RegionTaskDispatcher.runOnChunk(this.world, chunkX, chunkZ, () -> {
+                        final RegionizedWorldData target = TickRegionScheduler.getCurrentWorldData();
+                        if (target != null) {
+                            target.pushBlockEvent(event);
+                        }
+                    });
+                    continue;
+                }
+
+                if (tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
                     if (this.doBlockEvent(event)) {
-                        this.world.getServer().getPlayerManager().sendToAround(null, event.pos().getX(), event.pos().getY(), event.pos().getZ(), 64.0, this.world.getRegistryKey(), new BlockEventS2CPacket(event.pos(), event.block(), event.eventId(), event.eventParam()));
+                        // In vanilla this happens on the main thread. When regions are active, block events
+                        // are processed on region threads, so bounce packet sending back to the main thread
+                        // to match Folia/Paper thread-safety expectations.
+                        final BlockEventS2CPacket packet = new BlockEventS2CPacket(event.pos(), event.block(), event.eventId(), event.eventParam());
+                        this.world.getServer().execute(() -> {
+                            // Important for piston correctness: flush block state updates first so the client
+                            // does not receive a block-event (animation) packet ahead of the chunk delta updates
+                            // produced by the block event.
+                            if (this.world instanceof RegionizedServerWorld regionized) {
+                                final RegionizedWorldData worldData = regionized.ruthenium$getWorldRegionData();
+                                worldData.acquireChunkWriteLock();
+                                try {
+                                    if (!this.world.isDebugWorld()) {
+                                        final ServerChunkManager chunkManager = this.world.getChunkManager();
+                                        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
+                                    }
+                                } finally {
+                                    worldData.releaseChunkWriteLock();
+                                }
+                            }
+
+                            this.world.getServer().getPlayerManager().sendToAround(
+                                null,
+                                event.pos().getX(),
+                                event.pos().getY(),
+                                event.pos().getZ(),
+                                64.0,
+                                this.world.getRegistryKey(),
+                                packet
+                            );
+                        });
                     }
                 } else {
                     toReschedule.add(event);

@@ -28,6 +28,29 @@ public final class RegionThreadUtil {
     }
 
     /**
+     * Returns whether the current thread can safely access the block at the given position.
+     * On region threads this requires that the owning region matches the current region.
+     */
+    public static boolean canAccessBlock(final World world, final BlockPos pos) {
+        if (!(world instanceof ServerWorld serverWorld)) {
+            return true; // client or non-server contexts are single-threaded
+        }
+        if (!isRegionThread()) {
+            return true; // main thread orchestrator access is allowed
+        }
+        final int chunkX = pos.getX() >> 4;
+        final int chunkZ = pos.getZ() >> 4;
+        if (!ownsChunk(serverWorld, chunkX, chunkZ)) {
+            return false;
+        }
+        // Mirror Folia's "if loaded" checks: never trigger loads from region threads.
+        // IMPORTANT: Avoid ServerChunkManager#getChunk(...) here because it can have main-thread
+        // assumptions; instead use getWorldChunk(...) which is the same loaded/full-chunk view we
+        // tick against in the region scheduler.
+        return serverWorld.getChunkManager().getWorldChunk(chunkX, chunkZ) != null;
+    }
+
+    /**
      * Checks whether the current thread owns a region within the supplied world.
      *
      * @param world world to check
@@ -67,15 +90,13 @@ public final class RegionThreadUtil {
         if (region == null || TickRegionScheduler.getCurrentWorld() != world) {
             return false;
         }
-
-        final RegionTickData data = region.getData();
         if (radius <= 0) {
-            return data.containsChunk(chunkX, chunkZ);
+            return region.containsChunk(chunkX, chunkZ);
         }
 
         for (int dx = -radius; dx <= radius; ++dx) {
             for (int dz = -radius; dz <= radius; ++dz) {
-                if (data.containsChunk(chunkX + dx, chunkZ + dz)) {
+                if (region.containsChunk(chunkX + dx, chunkZ + dz)) {
                     return true;
                 }
             }
