@@ -5,17 +5,18 @@
 ### Completed
 - [x] **Block events region ownership** (note blocks, synced block events): forward to owning region thread.
 - [x] **Prevent cross-region neighbor updates (Folia patch 0004, partial):**
-  - [x] Guard `World.updateNeighbor` + related neighbor update entry points.
+  - [x] Guard `World.updateNeighbor` (target position) to block cross-region block modifications.
   - [x] Guard `NeighborUpdater.tryNeighborUpdate` and `NeighborUpdater.replaceWithStateForNeighborUpdate`.
   - [x] Ensure guards do not trigger chunk loads from region threads (only allow if chunk is already loaded).
   - [x] Guard additional direct neighbor reads in vanilla implementations:
-    - [x] `DetectorRailBlock.updateNearbyRails` neighbor state reads.
-    - [x] `PoweredRailBlock.isPoweredByOtherRails` recursion base case.
-    - [x] `RedstoneController.calculateWirePowerAt` neighbor state reads.
-    - [x] `World.updateComparators` (output-signal/comparator updates) neighbor reads.
-    - [x] `AbstractRedstoneGateBlock` (repeaters, gates) neighbor state reads.
-    - [x] `ComparatorBlock.calculateOutputSignal` / `ComparatorBlock.update` neighbor reads.
-    - [x] `PistonHandler` block-state reads during push calculation.
+    - [x] `DetectorRailBlock.updateNearbyRails` neighbor state reads (AIR fallback, allows loaded non-owned reads).
+    - [x] `PoweredRailBlock.isPoweredByOtherRails` recursion base case (AIR fallback, allows loaded non-owned reads).
+    - [x] `RedstoneController.calculateWirePowerAt` neighbor state reads (allows loaded non-owned reads for cross-region sensing).
+    - [x] `World.updateComparators` neighbor reads (allows loaded non-owned reads).
+    - [x] `ComparatorBlock.calculateOutputSignal` / `ComparatorBlock.update` neighbor reads (allows loaded non-owned reads).
+    - [x] `PistonHandler` block-state reads during push calculation (BEDROCK barrier for non-owned chunks).
+  - [x] `ImposterProtoChunk.getBlockEntity` guarded for thread safety (Folia 0005 parity).
+- [x] **Vanilla redstone within regions:** Redstone behaves 100% vanilla within a region's boundaries. Cross-region neighbor updates are blocked at TARGET position only, source position methods run normally.
 
 ### Needed (Parity Targets)
 - [ ] **Folia patch 0004 remainder:** guard additional redstone/physics call sites that directly read/update neighbors without going through `World`/`NeighborUpdater` entry points.
@@ -68,35 +69,35 @@
   - [x] Audit `MinecraftServerMixin` for proper scheduler bootstrap/shutdown hooks
   - [x] Validate dimension iteration respects per-world scheduler state
 
-- [ ] **Implement complete shutdown sequence**
-  - [ ] Complete `RegionShutdownThread` implementation:
-    - [ ] Halt all region schedulers and wait for in-flight ticks to complete
-    - [ ] Process pending cross-region teleports before final stop
-    - [ ] Save all player inventories, ender chests, and advancements
-    - [ ] Force-save all dirty chunks across all regions
-    - [ ] Save level data (world border, game rules, time, weather)
-    - [ ] Integrate with server watchdog for escalation on hang
+- [x] **Implement complete shutdown sequence**
+  - [x] Complete `RegionShutdownThread` implementation:
+    - [x] Halt all region schedulers and wait for in-flight ticks to complete
+    - [x] Process pending cross-region teleports before final stop
+    - [x] Save all player inventories, ender chests, and advancements
+    - [x] Force-save all dirty chunks across all regions
+    - [x] Save level data (world border, game rules, time, weather)
+    - [x] Integrate with server watchdog for escalation on hang
   - [ ] Add scheduler failure detection and auto-recovery
   - [ ] Implement graceful degradation (fallback to main thread on critical failure)
 
 ### 2. Complete RegionizedWorldData - World State Decoupling
 - [x] **Finish world data holder implementation**
   - [x] Implement full entity/connection split & merge callbacks in `RegionizedWorldData`
-  - [ ] Mirror chunk tick lists (random ticks, scheduled ticks, fluid ticks)
-  - [ ] Port mob spawning windows and per-region spawn caps
-  - [ ] Implement nearby player tracker with chunk-distance bucketing
-  - [ ] Add region-local scheduled tick lists with merge/split migration
+  - [x] Mirror chunk tick lists (random ticks, scheduled ticks, fluid ticks)
+  - [x] Port mob spawning windows and per-region spawn caps
+  - [x] Implement nearby player tracker with chunk-distance bucketing
+  - [x] Add region-local scheduled tick lists with merge/split migration
 
-- [ ] **Implement Folia global tick services**
+- [x] **Implement Folia global tick services**
   - [x] Tick world border on the orchestrator thread.
   - [x] Advance weather cycle on the orchestrator thread.
   - [x] Tick sleeping/night-skip state on the orchestrator thread.
   - [x] Tick raids using thread-safe raid manager integration.
   - [x] Tick time progression (game time + daylight time).
   - [x] Update world tick snapshots (`updateTickData` / cached tick data).
-  - [ ] Drain global chunk tasks (global task queue) before region ticks.
-  - [ ] Update sky brightness on the orchestrator thread.
-  - [ ] Ensure chunk ticket updates are processed (Moonrise parity).
+  - [x] Drain global chunk tasks (global task queue) before region ticks.
+  - [x] Update sky brightness on the orchestrator thread.
+  - [x] Ensure chunk ticket updates are processed (Moonrise parity).
 
 ### 3. Eliminate Main Thread Ticking Paths
 - [ ] **Audit and block all vanilla tick entry points**

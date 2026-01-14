@@ -4,6 +4,10 @@ import net.minecraft.server.world.ServerChunkLoadingManager;
 import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ChunkTicketManager;
 import net.minecraft.util.profiler.Profiler;
+import net.minecraft.world.SpawnHelper;
+import net.minecraft.entity.SpawnGroup;
+import net.minecraft.world.chunk.WorldChunk;
+import java.util.List;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.gen.Invoker;
@@ -25,4 +29,13 @@ public interface ServerChunkManagerAccessor {
 
     @Invoker("broadcastUpdates")
     void ruthenium$invokeBroadcastUpdates(Profiler profiler);
+
+    @Invoker("tickSpawningChunk")
+    void ruthenium$invokeTickSpawningChunk(WorldChunk chunk, long timeDelta, List<SpawnGroup> spawnableGroups, SpawnHelper.Info info);
+
+    @Invoker("executeQueuedTasks")
+    boolean ruthenium$invokeExecuteQueuedTasks();
+
+    @Accessor("spawnMonsters")
+    boolean ruthenium$getSpawnMonsters();
 }

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Spottedleaf <Spottedleaf@users.noreply.github.com>
+Date: Sun, 25 Jun 2023 13:57:30 -0700
+Subject: [PATCH] Sync vehicle position to player position on player data load
+
+This allows the player to be re-positioned before logging into
+the world without causing thread checks to trip on Folia.
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 73f641d4035293c3a3c6abb8fa7c61a38c4012cb..0dbc2d45bd367342a15024e72458f7c18370a369 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -718,8 +718,18 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+         Optional<ValueInput> optional = input.child("RootVehicle");
+         if (!optional.isEmpty()) {
+             ServerLevel serverLevel = this.level();
++            Vec3 playerPos = this.position(); // Paper - force sync root vehicle to player position
+             Entity entity = EntityType.loadEntityRecursive(
+-                optional.get().childOrEmpty("Entity"), serverLevel, EntitySpawnReason.LOAD, entity2 -> !serverLevel.addWithUUID(entity2, org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.MOUNT) ? null : entity2 // Paper - Entity#getEntitySpawnReason
++                    // Paper start - force sync root vehicle to player position
++                    optional.get().childOrEmpty("Entity"), serverLevel, EntitySpawnReason.LOAD, (Entity entity2) -> {
++                        // Paper start - force sync root vehicle to player position
++                        if (entity2.distanceToSqr(ServerPlayer.this) > (5.0 * 5.0)) {
++                            entity2.setPosRaw(playerPos.x, playerPos.y, playerPos.z, true);
++                        }
++                        // Paper end - force sync root vehicle to player position
++                        return !serverLevel.addWithUUID(entity2, org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.MOUNT) ? null : entity2; // Paper - Entity#getEntitySpawnReason
++                    }
++                    // Paper end - force sync root vehicle to player position
+             );
+             if (entity != null) {
+                 UUID uuid = optional.get().read("Attach", UUIDUtil.CODEC).orElse(null);

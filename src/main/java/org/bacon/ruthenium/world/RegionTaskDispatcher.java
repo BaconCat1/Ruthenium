@@ -135,4 +135,25 @@ public final class RegionTaskDispatcher {
             TickRegionScheduler.getInstance().notifyRegionTasks(data.getScheduleHandle());
         }
     }
+
+    public static int drainPendingChunkTasks(final ServerWorld world) {
+        final ConcurrentHashMap<Long, ConcurrentLinkedQueue<Runnable>> byChunk = PENDING_CHUNK_TASKS.remove(world);
+        if (byChunk == null || byChunk.isEmpty()) {
+            return 0;
+        }
+        int drained = 0;
+        for (final ConcurrentLinkedQueue<Runnable> queue : byChunk.values()) {
+            Runnable runnable;
+            while ((runnable = queue.poll()) != null) {
+                drained++;
+                try {
+                    runnable.run();
+                } catch (final Throwable throwable) {
+                    LOGGER.warn("Failed to run pending chunk task during shutdown in world {}",
+                        world.getRegistryKey().getValue(), throwable);
+                }
+            }
+        }
+        return drained;
+    }
 }

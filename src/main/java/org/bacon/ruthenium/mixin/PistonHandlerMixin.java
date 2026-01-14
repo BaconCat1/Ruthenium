@@ -4,6 +4,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import org.bacon.ruthenium.world.RegionThreadUtil;
@@ -28,10 +29,21 @@ public abstract class PistonHandlerMixin {
     private BlockState ruthenium$guardPistonHandlerGetBlockState(final World world,
                                                                  final BlockPos pos,
                                                                  final Operation<BlockState> original) {
-        if (!RegionThreadUtil.canAccessBlock(world, pos)) {
-            // Treat non-owned/non-loaded chunks as a hard barrier so pistons do not
-            // attempt to move blocks across region boundaries.
-            return Blocks.BEDROCK.getDefaultState();
+        if (world instanceof ServerWorld serverWorld) {
+            if (RegionThreadUtil.isRegionThread() && !RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
+                // For pistons specifically, we want to block pushing into non-owned regions.
+                // However, if the chunk is loaded we can read the state to determine if
+                // the piston CAN push (even though we'll block it with BEDROCK for unowned chunks).
+                int x = pos.getX() >> 4;
+                int z = pos.getZ() >> 4;
+                if (!serverWorld.getChunkManager().isChunkLoaded(x, z)) {
+                    // Not loaded at all - treat as barrier
+                    return Blocks.BEDROCK.getDefaultState();
+                }
+                // Loaded but not owned - still treat as barrier to prevent cross-region block movement
+                // This is intentional: pistons should not push blocks into other regions
+                return Blocks.BEDROCK.getDefaultState();
+            }
         }
         return original.call(world, pos);
     }

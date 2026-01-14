@@ -127,6 +127,7 @@ public final class RutheniumConfig {
         public boolean schedulerLogFallbackStackTraces = false;
         public boolean schedulerLogRegionSummaries = false;
         public boolean schedulerLogTaskQueueProcessing = false;
+        public boolean schedulerLogRedstoneTrace = false;
     }
 
     public static final class Debug {

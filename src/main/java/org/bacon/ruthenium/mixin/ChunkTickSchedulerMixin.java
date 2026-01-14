@@ -60,10 +60,20 @@ public abstract class ChunkTickSchedulerMixin<T> implements SerializableTickSche
     @SuppressWarnings("unchecked")
     @Overwrite
     public void scheduleTick(final OrderedTick<T> orderedTick) {
+        final BiConsumer<ChunkTickScheduler<T>, OrderedTick<T>> consumer;
+        final boolean queued;
         synchronized (this) {
             if (this.queuedTicks.add(orderedTick)) {
                 this.queueTick(orderedTick);
+                consumer = this.tickConsumer;
+                queued = true;
+            } else {
+                consumer = null;
+                queued = false;
             }
+        }
+        if (queued && consumer != null) {
+            consumer.accept((ChunkTickScheduler<T>)(Object)this, orderedTick);
         }
     }
 
@@ -192,9 +202,14 @@ public abstract class ChunkTickSchedulerMixin<T> implements SerializableTickSche
     @Overwrite
     public void disable(final long time) {
         synchronized (this) {
-            this.ticks = this.collectTicks(time);
-            this.tickQueue.clear();
-            this.queuedTicks.clear();
+            if (this.ticks == null) {
+                return;
+            }
+            long subTickOrder = -this.ticks.size();
+            for (final Tick<T> tick : this.ticks) {
+                this.queueTick(tick.createOrderedTick(time, subTickOrder++));
+            }
+            this.ticks = null;
         }
     }
 }

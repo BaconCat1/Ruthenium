@@ -12,6 +12,10 @@ import net.minecraft.util.profiler.Profilers;
 import net.minecraft.world.tick.ChunkTickScheduler;
 import net.minecraft.world.tick.OrderedTick;
 import net.minecraft.world.tick.WorldTickScheduler;
+import org.bacon.ruthenium.world.RegionizedServer;
+import org.bacon.ruthenium.world.RegionizedWorldData;
+import net.minecraft.block.Block;
+import net.minecraft.fluid.Fluid;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Overwrite;
@@ -65,6 +69,21 @@ public abstract class WorldTickSchedulerMixin<T> {
                 return;
             }
             scheduler.scheduleTick(orderedTick);
+        }
+        final RegionizedWorldData worldData = RegionizedServer.getCurrentWorldData();
+        if (worldData != null) {
+            final int chunkX = orderedTick.pos().getX() >> 4;
+            final int chunkZ = orderedTick.pos().getZ() >> 4;
+            final Object type = orderedTick.type();
+            if (type instanceof Block block) {
+                @SuppressWarnings("unchecked")
+                final OrderedTick<Block> blockTick = (OrderedTick<Block>) orderedTick;
+                worldData.registerScheduledBlockTick(chunkX, chunkZ, blockTick);
+            } else if (type instanceof Fluid fluid) {
+                @SuppressWarnings("unchecked")
+                final OrderedTick<Fluid> fluidTick = (OrderedTick<Fluid>) orderedTick;
+                worldData.registerScheduledFluidTick(chunkX, chunkZ, fluidTick);
+            }
         }
     }
 

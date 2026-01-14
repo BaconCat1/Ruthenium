@@ -2,6 +2,9 @@ package org.bacon.ruthenium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import net.minecraft.command.DefaultPermissions;
+import net.minecraft.command.permission.PermissionCheck;
+import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -38,7 +41,7 @@ public final class RegionCommand {
      */
     public static void register(final CommandDispatcher<ServerCommandSource> dispatcher) {
         final LiteralArgumentBuilder<ServerCommandSource> root = literal("region")
-            .requires(src -> src.hasPermissionLevel(2))
+            .requires(CommandManager.requirePermissionLevel(new PermissionCheck.Require(DefaultPermissions.GAMEMASTERS)))
             .executes(ctx -> {
                 final ServerCommandSource source = ctx.getSource();
                 final ServerPlayerEntity player;

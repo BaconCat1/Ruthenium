@@ -8,6 +8,9 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryPoolMXBean;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.command.DefaultPermissions;
+import net.minecraft.command.permission.PermissionCheck;
+import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 import org.bacon.ruthenium.Ruthenium;
@@ -28,7 +31,7 @@ public final class RutheniumDebugCommand {
 
     public static void register(final CommandDispatcher<ServerCommandSource> dispatcher) {
         final LiteralArgumentBuilder<ServerCommandSource> root = literal("ruthenium")
-            .requires(src -> src.hasPermissionLevel(2))
+            .requires(CommandManager.requirePermissionLevel(new PermissionCheck.Require(DefaultPermissions.GAMEMASTERS)))
             .then(literal("dump").executes(ctx -> executeSchedulerDump(ctx.getSource())))
             .then(literal("threaddump").executes(ctx -> executeThreadDump(ctx.getSource())))
             .then(literal("memorymapdump").executes(ctx -> executeMemoryDump(ctx.getSource())))

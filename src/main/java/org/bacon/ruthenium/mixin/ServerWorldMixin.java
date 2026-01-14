@@ -5,6 +5,8 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.block.Block;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.entity.Entity.RemovalReason;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.village.raid.Raid;
 import net.minecraft.village.raid.RaidManager;
@@ -126,6 +128,50 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
         ordinal = 0))
     private void ruthenium$validateScheduledTicksFallback(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
         FallbackValidator.validateScheduledTickProcessing(this.ruthenium$self());
+    }
+
+    @Inject(method = "onPlayerConnected", at = @At("TAIL"))
+    private void ruthenium$trackConnectedPlayer(final ServerPlayerEntity player, final CallbackInfo ci) {
+        final ServerWorld world = this.ruthenium$self();
+        final int chunkX = player.getBlockX() >> 4;
+        final int chunkZ = player.getBlockZ() >> 4;
+        if (RegionizedServer.isOnRegionThread()) {
+            final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+            if (worldData != null) {
+                worldData.addPlayer(player);
+                worldData.updatePlayerTrackingPosition(player);
+            }
+            return;
+        }
+        RegionTaskDispatcher.runOnChunk(world, chunkX, chunkZ, () -> {
+            final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+            if (worldData != null) {
+                worldData.addPlayer(player);
+                worldData.updatePlayerTrackingPosition(player);
+            }
+        });
+    }
+
+    @Inject(method = "removePlayer", at = @At("HEAD"))
+    private void ruthenium$untrackRemovedPlayer(final ServerPlayerEntity player,
+                                                final RemovalReason reason,
+                                                final CallbackInfo ci) {
+        final ServerWorld world = this.ruthenium$self();
+        final int chunkX = player.getBlockX() >> 4;
+        final int chunkZ = player.getBlockZ() >> 4;
+        if (RegionizedServer.isOnRegionThread()) {
+            final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+            if (worldData != null) {
+                worldData.removePlayer(player);
+            }
+            return;
+        }
+        RegionTaskDispatcher.runOnChunk(world, chunkX, chunkZ, () -> {
+            final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();
+            if (worldData != null) {
+                worldData.removePlayer(player);
+            }
+        });
     }
 
     @Inject(method = "getRaidAt", at = @At("HEAD"), cancellable = true)

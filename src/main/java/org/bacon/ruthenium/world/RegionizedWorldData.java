@@ -354,6 +354,7 @@ public class RegionizedWorldData {
      * keep the world responsive.
      */
     public void tickGlobalServices() {
+        this.drainGlobalChunkTasks();
         // this.tickConnections(); // Regionized
         if (this.tickAllowed) {
             this.tickWorldBorder();
@@ -362,9 +363,11 @@ public class RegionizedWorldData {
             // Scheduled ticks are now regionized - processed on region threads
             // this.tickScheduledTickSchedulers();
             this.tickRaids();
+            this.updateSkyBrightness();
         }
         this.updateSleepingPlayers();
         this.resetMobWakeupBudgets(4, 8, 2, 4);
+        this.processChunkTicketUpdates();
     }
 
     public void tickRegionServices() {
@@ -509,8 +512,20 @@ public class RegionizedWorldData {
         this.nearbyPlayers.tickPlayer(player);
     }
 
+    public List<ServerPlayerEntity> getPlayers() {
+        return this.players;
+    }
+
     public NearbyPlayers getNearbyPlayers() {
         return this.nearbyPlayers;
+    }
+
+    public boolean isSpawnChunk(final int chunkX, final int chunkZ) {
+        return this.spawnChunkTracker.hasObjectsNear(chunkX, chunkZ);
+    }
+
+    public void setLastSpawnState(final Object spawnState) {
+        this.lastSpawnState = spawnState;
     }
 
     private void rebuildPlayerTrackers() {
@@ -828,6 +843,22 @@ public class RegionizedWorldData {
         ((ServerWorldAccessor)this.world).ruthenium$invokeTickTime();
     }
 
+    private void updateSkyBrightness() {
+        ((org.bacon.ruthenium.mixin.accessor.WorldAccessor)this.world).ruthenium$invokeCalculateAmbientDarkness();
+    }
+
+    private void drainGlobalChunkTasks() {
+        final ServerChunkManager chunkManager = this.world.getChunkManager();
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeExecuteQueuedTasks();
+    }
+
+    private void processChunkTicketUpdates() {
+        final ServerChunkManager chunkManager = this.world.getChunkManager();
+        final ServerChunkLoadingManager loadingManager =
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager();
+        ((ServerChunkManagerAccessor)chunkManager).ruthenium$getTicketManager().tick(loadingManager);
+    }
+
     @SuppressWarnings("unused")
     private void tickScheduledTickSchedulers() {
         if (this.world.isDebugWorld()) {
@@ -870,6 +901,22 @@ public class RegionizedWorldData {
         this.scheduledFluidTickChunks.add(chunkKey);
     }
 
+    public void consumeScheduledBlockTick(final long chunkKey, final OrderedTick<Block> tick) {
+        this.consumeScheduledTick(this.scheduledBlockTicks, this.scheduledBlockTickChunks, chunkKey, tick);
+    }
+
+    public void consumeScheduledFluidTick(final long chunkKey, final OrderedTick<Fluid> tick) {
+        this.consumeScheduledTick(this.scheduledFluidTicks, this.scheduledFluidTickChunks, chunkKey, tick);
+    }
+
+    public void mirrorScheduledBlockTickChunk(final long chunkKey, final boolean hasTicks) {
+        this.mirrorScheduledTickChunk(this.scheduledBlockTicks, this.scheduledBlockTickChunks, chunkKey, hasTicks);
+    }
+
+    public void mirrorScheduledFluidTickChunk(final long chunkKey, final boolean hasTicks) {
+        this.mirrorScheduledTickChunk(this.scheduledFluidTicks, this.scheduledFluidTickChunks, chunkKey, hasTicks);
+    }
+
     public List<OrderedTick<Block>> getScheduledBlockTicks(final long chunkKey) {
         return this.scheduledBlockTicks.get(chunkKey);
     }
@@ -891,6 +938,33 @@ public class RegionizedWorldData {
                                         final OrderedTick<T> tick) {
         final List<OrderedTick<T>> list = target.computeIfAbsent(chunkKey, key -> new ArrayList<>());
         list.add(tick);
+    }
+
+    private <T> void consumeScheduledTick(final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target,
+                                          final LongSet chunkSet,
+                                          final long chunkKey,
+                                          final OrderedTick<T> tick) {
+        final List<OrderedTick<T>> list = target.get(chunkKey);
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        list.remove(tick);
+        if (list.isEmpty()) {
+            target.remove(chunkKey);
+            chunkSet.remove(chunkKey);
+        }
+    }
+
+    private <T> void mirrorScheduledTickChunk(final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target,
+                                              final LongSet chunkSet,
+                                              final long chunkKey,
+                                              final boolean hasTicks) {
+        if (hasTicks) {
+            chunkSet.add(chunkKey);
+            return;
+        }
+        chunkSet.remove(chunkKey);
+        target.remove(chunkKey);
     }
 
     private static <T> void absorbScheduledTickLists(final Long2ObjectOpenHashMap<List<OrderedTick<T>>> target,
@@ -988,77 +1062,70 @@ public class RegionizedWorldData {
 
     /**
      * Processes block events for this region. This should be called from region threads.
-     * Mirrors Folia's runBlockEvents() implementation.
+     * Mirrors vanilla's runBlockEvents() implementation with proper ordering for pistons/redstone.
+     *
+     * CRITICAL: Block events must be processed in a loop that continues until the queue is empty,
+     * because processing one block event (e.g., piston) can add new block events that need to be
+     * processed in the SAME tick to maintain vanilla behavior.
+     *
+     * NOTE: Block event packets are NOT sent here - they're collected and returned to the caller.
+     * The caller (TickRegionScheduler) is responsible for:
+     * 1. Calling broadcastUpdates() to flush chunk deltas
+     * 2. THEN sending the block event packets
+     * This ensures clients receive block state updates BEFORE animation packets.
+     *
+     * @return list of block event packets to send after chunk updates are flushed
      */
-    public void processBlockEvents() {
-        // Block events are stored per-region, but the authoritative "should tick blocks" snapshot
-        // is maintained on the world-scoped RegionizedWorldData instance refreshed by the main-thread
-        // orchestrator (see TickRegionScheduler.tickWorld()). Use that snapshot for gating.
+    public List<BlockEventS2CPacket> processBlockEvents() {
+        // Get the world-scoped data which contains the authoritative "should tick" snapshot
+        // maintained by the main-thread orchestrator.
         final RegionizedWorldData tickView = this.world instanceof RegionizedServerWorld regionized
             ? regionized.ruthenium$getWorldRegionData()
             : this;
         final List<BlockEventData> toReschedule = new ArrayList<>(64);
+        final List<BlockEventS2CPacket> packetsToSend = new ArrayList<>(64);
 
-        synchronized (this.blockEventsLock) {
-            while (!this.blockEvents.isEmpty()) {
-                final BlockEventData event = this.blockEvents.removeFirst();
+        // Process block events outside of the synchronized block so that new events can be added
+        // while we're processing. This is critical for pistons which chain-react.
+        BlockEventData event;
+        while ((event = this.removeFirstBlockEvent()) != null) {
+            final int chunkX = event.chunkX();
+            final int chunkZ = event.chunkZ();
 
-                final int chunkX = event.chunkX();
-                final int chunkZ = event.chunkZ();
-
-                if (!RegionThreadUtil.ownsChunk(this.world, chunkX, chunkZ)) {
-                    // Hand the event to the region that owns this chunk instead of looping forever locally
-                    RegionTaskDispatcher.runOnChunk(this.world, chunkX, chunkZ, () -> {
-                        final RegionizedWorldData target = TickRegionScheduler.getCurrentWorldData();
-                        if (target != null) {
-                            target.pushBlockEvent(event);
-                        }
-                    });
-                    continue;
+            // Check if this chunk should be ticked using the world-scoped authoritative snapshot
+            if (tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
+                if (this.doBlockEvent(event)) {
+                    // Queue the packet - caller will send AFTER flushing chunk updates
+                    packetsToSend.add(new BlockEventS2CPacket(event.pos(), event.block(), event.eventId(), event.eventParam()));
                 }
-
-                if (tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
-                    if (this.doBlockEvent(event)) {
-                        // In vanilla this happens on the main thread. When regions are active, block events
-                        // are processed on region threads, so bounce packet sending back to the main thread
-                        // to match Folia/Paper thread-safety expectations.
-                        final BlockEventS2CPacket packet = new BlockEventS2CPacket(event.pos(), event.block(), event.eventId(), event.eventParam());
-                        this.world.getServer().execute(() -> {
-                            // Important for piston correctness: flush block state updates first so the client
-                            // does not receive a block-event (animation) packet ahead of the chunk delta updates
-                            // produced by the block event.
-                            if (this.world instanceof RegionizedServerWorld regionized) {
-                                final RegionizedWorldData worldData = regionized.ruthenium$getWorldRegionData();
-                                worldData.acquireChunkWriteLock();
-                                try {
-                                    if (!this.world.isDebugWorld()) {
-                                        final ServerChunkManager chunkManager = this.world.getChunkManager();
-                                        ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeBroadcastUpdates(Profilers.get());
-                                    }
-                                } finally {
-                                    worldData.releaseChunkWriteLock();
-                                }
-                            }
-
-                            this.world.getServer().getPlayerManager().sendToAround(
-                                null,
-                                event.pos().getX(),
-                                event.pos().getY(),
-                                event.pos().getZ(),
-                                64.0,
-                                this.world.getRegistryKey(),
-                                packet
-                            );
-                        });
-                    }
-                } else {
-                    toReschedule.add(event);
-                }
+            } else {
+                toReschedule.add(event);
             }
-            // Re-add events that need to be rescheduled
-            for (final BlockEventData event : toReschedule) {
-                this.blockEvents.add(event);
-            }
+        }
+
+        // Re-add events that need to be rescheduled (chunk not ready to tick yet)
+        if (!toReschedule.isEmpty()) {
+            this.pushBlockEvents(toReschedule);
+        }
+
+        return packetsToSend;
+    }
+
+    /**
+     * Sends block event packets to nearby players.
+     * Called by TickRegionScheduler AFTER broadcastUpdates() to ensure proper ordering.
+     */
+    public void sendBlockEventPackets(final List<BlockEventS2CPacket> packets) {
+        for (final BlockEventS2CPacket packet : packets) {
+            this.world.getServer().getPlayerManager().sendToAround(
+                null,
+                packet.getPos().getX(),
+                packet.getPos().getY(),
+                packet.getPos().getZ(),
+                64.0,
+                this.world.getRegistryKey(),
+                packet
+            );
         }
     }
 

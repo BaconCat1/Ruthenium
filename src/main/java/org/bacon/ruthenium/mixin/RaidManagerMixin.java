@@ -13,8 +13,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.village.raid.Raid;
 import net.minecraft.village.raid.RaidManager;
-import net.minecraft.world.GameRules;
-import net.minecraft.world.dimension.DimensionType;
+import net.minecraft.world.rule.GameRules;
 import net.minecraft.world.poi.PointOfInterest;
 import net.minecraft.world.poi.PointOfInterestStorage;
 import org.bacon.ruthenium.world.RegionThreadUtil;
@@ -120,7 +119,7 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
      */
     @Overwrite
     public void tick(final ServerWorld world) {
-        final boolean disableRaids = world.getGameRules().getBoolean(GameRules.DISABLE_RAIDS);
+        final boolean disableRaids = world.getGameRules().getValue(GameRules.DISABLE_RAIDS);
         synchronized (this.raids) {
             final Iterator<Raid> iterator = this.raids.values().iterator();
             while (iterator.hasNext()) {
@@ -158,11 +157,11 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         if (world == null) {
             return null;
         }
-        if (world.getGameRules().getBoolean(GameRules.DISABLE_RAIDS)) {
+        if (world.getGameRules().getValue(GameRules.DISABLE_RAIDS)) {
             return null;
         }
-        final DimensionType dimensionType = world.getDimension();
-        if (!dimensionType.hasRaids()) {
+        // In 1.21.11, hasRaids() was removed from DimensionType - raids only occur in overworld
+        if (!world.getRegistryKey().equals(net.minecraft.world.World.OVERWORLD)) {
             return null;
         }
         if (!RegionThreadUtil.ownsPlayer(player, 8) || !RegionThreadUtil.ownsPosition(world, pos, 8)) {

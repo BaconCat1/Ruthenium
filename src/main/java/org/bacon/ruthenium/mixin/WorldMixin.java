@@ -7,7 +7,6 @@ import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.profiler.Profilers;
 import net.minecraft.world.World;
@@ -120,10 +119,16 @@ public abstract class WorldMixin {
     }
 
     /**
-     * Prevent neighbor updates from crossing region boundaries. This mirrors Folia's guard that
-     * suppresses block updates in non-owned or unloaded chunks to avoid cross-thread violations.
+     * Guard neighbor updates to prevent cross-region block modifications.
+     *
+     * Note: updateNeighborsAlways and updateNeighborsExcept are NOT guarded here because they receive
+     * the SOURCE position (which is always accessible since we're the ones who changed it).
+     * The guard is placed on updateNeighbor which receives the TARGET position.
+     *
+     * This allows vanilla redstone to function normally within a region - only cross-region
+     * updates to inaccessible target positions are blocked.
      */
-        @Inject(method = "updateNeighbor(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/Block;Lnet/minecraft/world/block/WireOrientation;)V",
+    @Inject(method = "updateNeighbor(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/Block;Lnet/minecraft/world/block/WireOrientation;)V",
             at = @At("HEAD"), cancellable = true)
     private void ruthenium$guardNeighborUpdate(final BlockPos pos,
                                                final Block sourceBlock,
@@ -135,43 +140,7 @@ public abstract class WorldMixin {
         if (!((Object)this instanceof ServerWorld serverWorld)) {
             return;
         }
-        if (org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
-            return;
-        }
-        ci.cancel();
-    }
-
-    @Inject(method = "updateNeighborsAlways(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/Block;Lnet/minecraft/world/block/WireOrientation;)V",
-            at = @At("HEAD"), cancellable = true)
-    private void ruthenium$guardUpdateNeighborsAlways(final BlockPos pos,
-                                                     final Block sourceBlock,
-                                                     final WireOrientation orientation,
-                                                     final CallbackInfo ci) {
-        if (this.isClient()) {
-            return;
-        }
-        if (!((Object) this instanceof ServerWorld serverWorld)) {
-            return;
-        }
-        if (org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
-            return;
-        }
-        ci.cancel();
-    }
-
-    @Inject(method = "updateNeighborsExcept(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/Block;Lnet/minecraft/util/math/Direction;Lnet/minecraft/world/block/WireOrientation;)V",
-            at = @At("HEAD"), cancellable = true)
-    private void ruthenium$guardUpdateNeighborsExcept(final BlockPos pos,
-                                                     final Block sourceBlock,
-                                                     final Direction except,
-                                                     final WireOrientation orientation,
-                                                     final CallbackInfo ci) {
-        if (this.isClient()) {
-            return;
-        }
-        if (!((Object) this instanceof ServerWorld serverWorld)) {
-            return;
-        }
+        // pos is the TARGET position to update - only block if we can't access it
         if (org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
             return;
         }
@@ -192,11 +161,13 @@ public abstract class WorldMixin {
         if (!((Object) this instanceof ServerWorld serverWorld)) {
             return;
         }
+        // pos is the TARGET position to update - only block if we can't access it
         if (org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
             return;
         }
         ci.cancel();
     }
+
 
     @WrapOperation(
             method = "updateComparators",
@@ -208,8 +179,17 @@ public abstract class WorldMixin {
     private BlockState ruthenium$guardUpdateComparatorsGetBlockState(final World world,
                                                                      final BlockPos pos,
                                                                      final Operation<BlockState> original) {
-        if (!org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(world, pos)) {
-            return Blocks.AIR.getDefaultState();
+        if (world instanceof ServerWorld serverWorld) {
+            if (org.bacon.ruthenium.world.RegionThreadUtil.isRegionThread()
+                    && !org.bacon.ruthenium.world.RegionThreadUtil.canAccessBlock(serverWorld, pos)) {
+                // Can't access safely (not owned), but allow reads from loaded chunks
+                int x = pos.getX() >> 4;
+                int z = pos.getZ() >> 4;
+                if (serverWorld.getChunkManager().isChunkLoaded(x, z)) {
+                    return original.call(world, pos);
+                }
+                return Blocks.AIR.getDefaultState();
+            }
         }
         return original.call(world, pos);
     }

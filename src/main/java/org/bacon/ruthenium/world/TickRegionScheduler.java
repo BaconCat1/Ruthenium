@@ -2,6 +2,8 @@ package org.bacon.ruthenium.world;
 
 import ca.spottedleaf.concurrentutil.scheduler.SchedulerThreadPool;
 import ca.spottedleaf.concurrentutil.util.TimeUtil;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -27,7 +29,10 @@ import net.minecraft.util.profiler.Profiler;
 import net.minecraft.util.profiler.Profilers;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.GameRules;
+import net.minecraft.world.SpawnDensityCapper;
+import net.minecraft.world.SpawnHelper;
+import net.minecraft.entity.SpawnGroup;
+import net.minecraft.world.rule.GameRules;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
@@ -646,114 +651,214 @@ public final class TickRegionScheduler {
         final RegionizedWorldData worldData = getCurrentWorldData();
         final RegionizedWorldData tickView = ((RegionizedServerWorld)world).ruthenium$getWorldRegionData();
         final long tickStart = System.nanoTime();
+        final Profiler profiler = Profilers.get();
+        boolean inBlockTick = false;
 
         int processedTasks = 0;
         processedTasks += runQueuedTasks(data, region, tickView, guard);
 
-        final MinecraftServer server = world.getServer();
-        final int randomTickSpeed = server.getGameRules().getInt(GameRules.RANDOM_TICK_SPEED);
-        final ServerChunkManager chunkManager = world.getChunkManager();
-
-        int tickedChunks = 0;
-        int skippedNotFull = 0;
         // Use region.getOwnedChunks() which tracks chunks at the regionizer section level,
         // ensuring we tick all chunks that belong to this region even if RegionTickData
         // hasn't been synchronized yet
         final long[] chunkSnapshot = region.getOwnedChunkArray();
+        int tickedChunks = 0;
+        int skippedNotFull = 0;
         boolean chunkLoopAborted = false;
-
-        // Acquire read lock to prevent main thread from broadcasting chunk data while we're ticking
         final int totalChunks = chunkSnapshot.length;
         int cursor = 0;
-        if (totalChunks > 0) {
-            cursor = data.getChunkTickCursor() % totalChunks;
-            if (cursor < 0) {
-                cursor += totalChunks;
-            }
-        } else {
-            data.setChunkTickCursor(0);
-        }
-
         int iteratedChunks = 0;
-        tickView.acquireChunkReadLock();
+        long scheduledNanos = 0L;
+        long chunkNanos = 0L;
+        long blockEventsNanos = 0L;
+        long blockEntitiesNanos = 0L;
+
+        profiler.push("rutheniumRegionTick");
         try {
-            for (int offset = 0; offset < totalChunks; ++offset) {
-                if (!guard.getAsBoolean()) {
-                    chunkLoopAborted = true;
-                    break;
-                }
+            // Mirror vanilla: inBlockTick stays true through scheduled ticks, chunk ticks, and block events.
+            ((ServerWorldAccessor)world).ruthenium$setInBlockTick(true);
+            inBlockTick = true;
 
-                final int i = cursor + offset < totalChunks ? cursor + offset : (cursor + offset) - totalChunks;
-                final long chunkKey = chunkSnapshot[i];
-                final int chunkX = CoordinateUtil.getChunkX(chunkKey);
-                final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
-                // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
-                if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
-                    iteratedChunks++;
-                    continue;
-                }
-                final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
-                if (worldChunk == null) {
-                    skippedNotFull++;
-                    iteratedChunks++;
-                    continue;
-                }
-
-                ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
+            // Tick scheduled ticks (block/fluid ticks) before chunk ticking to mirror vanilla ordering.
+            if (guard.getAsBoolean()) {
+                profiler.push("scheduledTicks");
+                final long sectionStart = System.nanoTime();
                 try {
-                    ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
-                    this.tickChunkEntities(world, chunkManager, tickView, chunkX, chunkZ);
-                    tickedChunks++;
+                    this.tickScheduledTicks(world, chunkSnapshot, tickView, tickCount);
                 } catch (final Throwable throwable) {
-                    LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
+                    LOGGER.error("Failed to tick scheduled ticks in region {}", region.id, throwable);
                 } finally {
-                    ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
+                    scheduledNanos += System.nanoTime() - sectionStart;
+                    profiler.pop();
                 }
+            }
 
-                iteratedChunks++;
+            final MinecraftServer server = world.getServer();
+            final int randomTickSpeed = world.getGameRules().getValue(GameRules.RANDOM_TICK_SPEED);
+            final ServerChunkManager chunkManager = world.getChunkManager();
+
+            // Acquire read lock to prevent main thread from broadcasting chunk data while we're ticking
+            if (totalChunks > 0) {
+                cursor = data.getChunkTickCursor() % totalChunks;
+                if (cursor < 0) {
+                    cursor += totalChunks;
+                }
+            } else {
+                data.setChunkTickCursor(0);
+            }
+
+            profiler.push("chunkTicks");
+            final long chunkStart = System.nanoTime();
+            tickView.acquireChunkReadLock();
+            try {
+                for (int offset = 0; offset < totalChunks; ++offset) {
+                    if (!guard.getAsBoolean()) {
+                        chunkLoopAborted = true;
+                        break;
+                    }
+
+                    final int i = cursor + offset < totalChunks ? cursor + offset : (cursor + offset) - totalChunks;
+                    final long chunkKey = chunkSnapshot[i];
+                    final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+                    final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+                    // No need to check containsChunk - the chunk is from getOwnedChunks() so it's authoritative
+                    if (!tickView.shouldTickBlocksInChunk(chunkX, chunkZ)) {
+                        iteratedChunks++;
+                        continue;
+                    }
+                    final WorldChunk worldChunk = chunkManager.getWorldChunk(chunkX, chunkZ);
+                    if (worldChunk == null) {
+                        skippedNotFull++;
+                        iteratedChunks++;
+                        continue;
+                    }
+
+                    ((RegionChunkTickAccess)world).ruthenium$pushRegionChunkTick();
+                    try {
+                        ((ServerWorldAccessor)world).ruthenium$invokeTickChunk(worldChunk, randomTickSpeed);
+                        this.tickChunkEntities(world, chunkManager, tickView, chunkX, chunkZ);
+                        tickedChunks++;
+                    } catch (final Throwable throwable) {
+                        LOGGER.error("Failed to tick chunk {} in region {}", new ChunkPos(chunkX, chunkZ), region.id, throwable);
+                    } finally {
+                        ((RegionChunkTickAccess)world).ruthenium$popRegionChunkTick();
+                    }
+
+                    iteratedChunks++;
+                }
+            } finally {
+                tickView.releaseChunkReadLock();
+                chunkNanos += System.nanoTime() - chunkStart;
+                profiler.pop();
+            }
+
+            if (totalChunks > 0) {
+                data.setChunkTickCursor(cursor + iteratedChunks);
+            }
+            if (chunkLoopAborted) {
+                this.logRegionChunkAbort(world, region, tickedChunks, totalChunks);
+            }
+
+            if (worldData != null && guard.getAsBoolean()) {
+                try {
+                    this.tickMobSpawning(world, worldData, chunkSnapshot);
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to run mob spawning for region {}", region.id, throwable);
+                }
+            }
+
+            // Process block events after chunk ticking to mirror vanilla ordering.
+            // Block event packets are collected but NOT sent yet - we send them after broadcastUpdates.
+            java.util.List<net.minecraft.network.packet.s2c.play.BlockEventS2CPacket> blockEventPackets = java.util.List.of();
+            if (worldData != null && guard.getAsBoolean()) {
+                profiler.push("blockEvents");
+                final long sectionStart = System.nanoTime();
+                tickView.acquireChunkReadLock();
+                try {
+                    blockEventPackets = worldData.processBlockEvents();
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to process block events in region {}", region.id, throwable);
+                } finally {
+                    tickView.releaseChunkReadLock();
+                    blockEventsNanos += System.nanoTime() - sectionStart;
+                    profiler.pop();
+                }
+            }
+
+            // CRITICAL FIX FOR PISTON VISUALS:
+            // Flush chunk updates AFTER block events complete so clients receive block state changes
+            // in the same tick. This sends chunk deltas to clients.
+            if (worldData != null && !world.isDebugWorld()) {
+                profiler.push("broadcastUpdates");
+                tickView.acquireChunkWriteLock();
+                try {
+                    ((ServerChunkManagerAccessor) world.getChunkManager()).ruthenium$invokeBroadcastUpdates(profiler);
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to broadcast chunk updates in region {}", region.id, throwable);
+                } finally {
+                    tickView.releaseChunkWriteLock();
+                    profiler.pop();
+                }
+            }
+
+            // NOW send block event packets - AFTER chunk deltas were sent.
+            // This ensures clients have correct block state before receiving animation triggers.
+            // For pistons: chunk delta shows moving_piston, THEN block event triggers animation.
+            if (!blockEventPackets.isEmpty() && worldData != null) {
+                profiler.push("blockEventPackets");
+                try {
+                    worldData.sendBlockEventPackets(blockEventPackets);
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to send block event packets in region {}", region.id, throwable);
+                } finally {
+                    profiler.pop();
+                }
+            }
+
+            ((ServerWorldAccessor)world).ruthenium$setInBlockTick(false);
+            inBlockTick = false;
+
+            // Tick block entities after block events to mirror vanilla ordering.
+            if (worldData != null && guard.getAsBoolean()) {
+                profiler.push("blockEntities");
+                final long sectionStart = System.nanoTime();
+                tickView.acquireChunkReadLock();
+                try {
+                    worldData.tickBlockEntities();
+                } catch (final Throwable throwable) {
+                    LOGGER.error("Failed to tick block entities in region {}", region.id, throwable);
+                } finally {
+                    tickView.releaseChunkReadLock();
+                    blockEntitiesNanos += System.nanoTime() - sectionStart;
+                    profiler.pop();
+                }
             }
         } finally {
-            tickView.releaseChunkReadLock();
-        }
-
-        if (totalChunks > 0) {
-            data.setChunkTickCursor(cursor + iteratedChunks);
-        }
-        if (chunkLoopAborted) {
-            this.logRegionChunkAbort(world, region, tickedChunks, totalChunks);
-        }
-
-        // Tick block entities for this region
-        if (worldData != null && guard.getAsBoolean()) {
-            tickView.acquireChunkReadLock();
-            try {
-                worldData.tickBlockEntities();
-            } catch (final Throwable throwable) {
-                LOGGER.error("Failed to tick block entities in region {}", region.id, throwable);
-            } finally {
-                tickView.releaseChunkReadLock();
+            if (inBlockTick) {
+                ((ServerWorldAccessor)world).ruthenium$setInBlockTick(false);
             }
+            profiler.pop();
         }
 
-        // Process block events for this region
-        if (worldData != null && guard.getAsBoolean()) {
-            tickView.acquireChunkReadLock();
-            try {
-                worldData.processBlockEvents();
-            } catch (final Throwable throwable) {
-                LOGGER.error("Failed to process block events in region {}", region.id, throwable);
-            } finally {
-                tickView.releaseChunkReadLock();
-            }
-        }
-
-        // Tick scheduled ticks (block/fluid ticks) for this region
-        if (guard.getAsBoolean()) {
-            try {
-                this.tickScheduledTicks(world, chunkSnapshot, tickView, tickCount);
-            } catch (final Throwable throwable) {
-                LOGGER.error("Failed to tick scheduled ticks in region {}", region.id, throwable);
-            }
+        if (this.loggingOptions.logRedstoneTrace()) {
+            final double scheduledMs = scheduledNanos / 1_000_000.0;
+            final double chunkMs = chunkNanos / 1_000_000.0;
+            final double blockEventsMs = blockEventsNanos / 1_000_000.0;
+            final double blockEntitiesMs = blockEntitiesNanos / 1_000_000.0;
+            LOGGER.info("[REDSTONE TRACE] region={} world={} scheduled={}/{}ms chunk={}/{}ms blockEvents={}/{}ms blockEntities={}/{}ms tickCount={} chunks={}/{} skippedNotFull={}",
+                region.id,
+                world.getRegistryKey().getValue(),
+                String.format(Locale.ROOT, "%.3f", scheduledMs),
+                scheduledNanos,
+                String.format(Locale.ROOT, "%.3f", chunkMs),
+                chunkNanos,
+                String.format(Locale.ROOT, "%.3f", blockEventsMs),
+                blockEventsNanos,
+                String.format(Locale.ROOT, "%.3f", blockEntitiesMs),
+                blockEntitiesNanos,
+                tickCount,
+                tickedChunks,
+                totalChunks,
+                skippedNotFull);
         }
 
         processedTasks += runQueuedTasks(data, region, tickView, guard);
@@ -868,25 +973,18 @@ public final class TickRegionScheduler {
     /**
      * Ticks scheduled block/fluid ticks for a region.
      * This runs on the region thread to process ticks that are due.
-     * When tickCount > 1, we process scheduled ticks for multiple game ticks to catch up.
      */
     private void tickScheduledTicks(final ServerWorld world, final long[] chunkSnapshot, final RegionizedWorldData tickView, final int tickCount) {
         if (world.isDebugWorld() || !world.getTickManager().shouldTick()) {
             return;
         }
-        // When lagging, we need to process scheduled ticks for all the ticks we're behind
-        // The effective time is the current time plus tickCount-1 (since we're catching up)
-        final long baseTime = world.getTime();
+        // Scheduled ticks should track vanilla world time; avoid fast-forwarding per-region.
+        final long time = world.getTime();
         final ServerWorldAccessor accessor = (ServerWorldAccessor) world;
-
-        // Process scheduled ticks for each tick we're behind
-        // This ensures scheduled ticks execute at the right time even when the region is lagging
         final int maxTicksPerCycle = this.maxScheduledTicksPerRegion;
-        for (int t = 0; t < tickCount; t++) {
-            final long effectiveTime = baseTime + t;
-            tickScheduledTicks(world, world.getBlockTickScheduler(), effectiveTime, maxTicksPerCycle, accessor::ruthenium$invokeTickBlock, chunkSnapshot, tickView);
-            tickScheduledTicks(world, world.getFluidTickScheduler(), effectiveTime, maxTicksPerCycle, accessor::ruthenium$invokeTickFluid, chunkSnapshot, tickView);
-        }
+        final RegionizedWorldData regionData = TickRegionScheduler.getCurrentWorldData();
+        tickScheduledTicks(world, world.getBlockTickScheduler(), time, maxTicksPerCycle, accessor::ruthenium$invokeTickBlock, chunkSnapshot, tickView, regionData, true);
+        tickScheduledTicks(world, world.getFluidTickScheduler(), time, maxTicksPerCycle, accessor::ruthenium$invokeTickFluid, chunkSnapshot, tickView, regionData, false);
     }
 
     private static <T> void tickScheduledTicks(final ServerWorld world,
@@ -895,7 +993,9 @@ public final class TickRegionScheduler {
                                                final int maxTicks,
                                                final java.util.function.BiConsumer<net.minecraft.util.math.BlockPos, T> ticker,
                                                final long[] chunkSnapshot,
-                                               final RegionizedWorldData tickView) {
+                                               final RegionizedWorldData tickView,
+                                               final RegionizedWorldData regionData,
+                                               final boolean blockTicks) {
         final net.minecraft.server.world.ServerChunkManager chunkManager = world.getChunkManager();
         @SuppressWarnings("unchecked")
         final org.bacon.ruthenium.mixin.accessor.WorldTickSchedulerAccessor<T> accessor =
@@ -916,9 +1016,10 @@ public final class TickRegionScheduler {
          *  2) Drain due ticks under the scheduler lock into a local list
          *  3) Execute drained ticks without holding the scheduler lock
          */
-        final long[] schedulerChunkKeys = new long[chunkSnapshot.length];
-        for (int i = 0; i < chunkSnapshot.length; i++) {
-            final long chunkKey = chunkSnapshot[i];
+        final long[] candidateChunks = resolveScheduledChunkCandidates(chunkSnapshot, scheduler, byChunk, regionData, blockTicks);
+        final long[] schedulerChunkKeys = new long[candidateChunks.length];
+        for (int i = 0; i < candidateChunks.length; i++) {
+            final long chunkKey = candidateChunks[i];
             final int chunkX = org.bacon.ruthenium.util.CoordinateUtil.getChunkX(chunkKey);
             final int chunkZ = org.bacon.ruthenium.util.CoordinateUtil.getChunkZ(chunkKey);
             schedulerChunkKeys[i] = net.minecraft.util.math.ChunkPos.toLong(chunkX, chunkZ);
@@ -945,14 +1046,151 @@ public final class TickRegionScheduler {
         try {
             for (int i = 0; i < toRun.size(); i++) {
                 final net.minecraft.world.tick.OrderedTick<T> tick = toRun.get(i);
+                final long chunkKey = org.bacon.ruthenium.util.CoordinateUtil.getChunkKey(tick.pos().getX() >> 4, tick.pos().getZ() >> 4);
                 try {
                     ticker.accept(tick.pos(), tick.type());
                 } catch (final Throwable throwable) {
                     LOGGER.error("Failed to run scheduled tick at {} in {}", tick.pos(), world.getRegistryKey().getValue(), throwable);
+                } finally {
+                    if (regionData != null) {
+                        if (blockTicks) {
+                            @SuppressWarnings("unchecked")
+                            final net.minecraft.world.tick.OrderedTick<net.minecraft.block.Block> blockTick =
+                                (net.minecraft.world.tick.OrderedTick<net.minecraft.block.Block>) tick;
+                            regionData.consumeScheduledBlockTick(chunkKey, blockTick);
+                        } else {
+                            @SuppressWarnings("unchecked")
+                            final net.minecraft.world.tick.OrderedTick<net.minecraft.fluid.Fluid> fluidTick =
+                                (net.minecraft.world.tick.OrderedTick<net.minecraft.fluid.Fluid>) tick;
+                            regionData.consumeScheduledFluidTick(chunkKey, fluidTick);
+                        }
+                    }
                 }
             }
         } finally {
             tickView.releaseChunkReadLock();
+        }
+    }
+
+    private static <T> long[] resolveScheduledChunkCandidates(final long[] chunkSnapshot,
+                                                              final Object schedulerMonitor,
+                                                              final it.unimi.dsi.fastutil.longs.Long2ObjectMap<net.minecraft.world.tick.ChunkTickScheduler<T>> byChunk,
+                                                              final RegionizedWorldData regionData,
+                                                              final boolean blockTicks) {
+        if (regionData == null || byChunk.isEmpty() || chunkSnapshot.length == 0) {
+            return chunkSnapshot;
+        }
+
+        final LongSet regionChunks = new LongOpenHashSet(chunkSnapshot.length);
+        for (final long chunkKey : chunkSnapshot) {
+            regionChunks.add(chunkKey);
+        }
+        synchronized (schedulerMonitor) {
+            for (final it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry<net.minecraft.world.tick.ChunkTickScheduler<T>> entry
+                : byChunk.long2ObjectEntrySet()) {
+                final long schedulerChunkKey = entry.getLongKey();
+                final int chunkX = net.minecraft.util.math.ChunkPos.getPackedX(schedulerChunkKey);
+                final int chunkZ = net.minecraft.util.math.ChunkPos.getPackedZ(schedulerChunkKey);
+                final long chunkKey = org.bacon.ruthenium.util.CoordinateUtil.getChunkKey(chunkX, chunkZ);
+                if (!regionChunks.contains(chunkKey)) {
+                    continue;
+                }
+                final net.minecraft.world.tick.ChunkTickScheduler<T> scheduler = entry.getValue();
+                final boolean hasTicks = scheduler != null && scheduler.peekNextTick() != null;
+                if (blockTicks) {
+                    regionData.mirrorScheduledBlockTickChunk(chunkKey, hasTicks);
+                } else {
+                    regionData.mirrorScheduledFluidTickChunk(chunkKey, hasTicks);
+                }
+            }
+        }
+
+        final LongSet mirrored = blockTicks
+            ? regionData.snapshotScheduledBlockTickChunks()
+            : regionData.snapshotScheduledFluidTickChunks();
+        if (mirrored.isEmpty()) {
+            return chunkSnapshot;
+        }
+        return mirrored.toLongArray();
+    }
+
+    private void tickMobSpawning(final ServerWorld world,
+                                 final RegionizedWorldData worldData,
+                                 final long[] chunkSnapshot) {
+        if (world.isDebugWorld()) {
+            return;
+        }
+        if (!world.getTickManager().shouldTick()) {
+            return;
+        }
+        if (!world.getGameRules().getValue(GameRules.DO_MOB_SPAWNING)) {
+            return;
+        }
+        if (worldData.getPlayers().isEmpty()) {
+            return;
+        }
+
+        final ServerChunkManager chunkManager = world.getChunkManager();
+        final List<WorldChunk> spawnChunks = new ArrayList<>();
+        for (final long chunkKey : chunkSnapshot) {
+            final int chunkX = CoordinateUtil.getChunkX(chunkKey);
+            final int chunkZ = CoordinateUtil.getChunkZ(chunkKey);
+            if (!worldData.isSpawnChunk(chunkX, chunkZ)) {
+                continue;
+            }
+            final WorldChunk chunk = chunkManager.getWorldChunk(chunkX, chunkZ);
+            if (chunk != null) {
+                spawnChunks.add(chunk);
+            }
+        }
+        if (spawnChunks.isEmpty()) {
+            return;
+        }
+
+        final LongSet regionChunks = new LongOpenHashSet(chunkSnapshot.length);
+        for (final long chunkKey : chunkSnapshot) {
+            regionChunks.add(chunkKey);
+        }
+        final List<Entity> regionEntities = new ArrayList<>();
+        for (final Entity entity : world.iterateEntities()) {
+            final ChunkPos pos = entity.getChunkPos();
+            final long chunkKey = CoordinateUtil.getChunkKey(pos.x, pos.z);
+            if (regionChunks.contains(chunkKey)) {
+                regionEntities.add(entity);
+            }
+        }
+
+        final SpawnDensityCapper densityCapper =
+            new SpawnDensityCapper(((ServerChunkManagerAccessor)chunkManager).ruthenium$getChunkLoadingManager());
+        final SpawnHelper.Info spawnInfo = SpawnHelper.setupSpawn(
+            spawnChunks.size(),
+            regionEntities,
+            (chunkPos, consumer) -> {
+                final int chunkX = ChunkPos.getPackedX(chunkPos);
+                final int chunkZ = ChunkPos.getPackedZ(chunkPos);
+                final WorldChunk chunk = chunkManager.getWorldChunk(chunkX, chunkZ);
+                if (chunk != null) {
+                    consumer.accept(chunk);
+                }
+            },
+            densityCapper
+        );
+        worldData.setLastSpawnState(spawnInfo);
+
+        final boolean spawnMonsters = ((ServerChunkManagerAccessor)chunkManager).ruthenium$getSpawnMonsters();
+        final List<SpawnGroup> spawnableGroups = SpawnHelper.collectSpawnableGroups(
+            spawnInfo,
+            true,
+            spawnMonsters,
+            false
+        );
+        if (spawnableGroups.isEmpty()) {
+            return;
+        }
+
+        final long timeDelta = 1L;
+        for (final WorldChunk chunk : spawnChunks) {
+            ((ServerChunkManagerAccessor)chunkManager).ruthenium$invokeTickSpawningChunk(chunk, timeDelta, spawnableGroups, spawnInfo);
         }
     }
 
@@ -1577,7 +1815,8 @@ public final class TickRegionScheduler {
             }
 
             final ServerWorld world = this.getWorld();
-            final long deadlineNanos = tickStart + TICK_INTERVAL_NANOS;
+            final long budgetWindow = Math.multiplyExact(Math.max(1L, (long) tickCount), TICK_INTERVAL_NANOS);
+            final long deadlineNanos = tickStart + budgetWindow;
             final BooleanSupplier guard = () -> !this.isMarkedNonSchedulable() && System.nanoTime() < deadlineNanos;
             final RunningTick runningTick = this.scheduler == null ? null
                 : this.scheduler.watchdog.track(world, this, Thread.currentThread(), tickStart);
@@ -1821,15 +2060,18 @@ public final class TickRegionScheduler {
         private final boolean logFallbackStacks;
         private final boolean logRegionSummaries;
         private final boolean logTaskQueueProcessing;
+        private final boolean logRedstoneTrace;
 
         private LoggingOptions(final boolean logFallbacks,
                                 final boolean logFallbackStacks,
                                 final boolean logRegionSummaries,
-                                final boolean logTaskQueueProcessing) {
+                                final boolean logTaskQueueProcessing,
+                                final boolean logRedstoneTrace) {
             this.logFallbacks = logFallbacks;
             this.logFallbackStacks = logFallbackStacks;
             this.logRegionSummaries = logRegionSummaries;
             this.logTaskQueueProcessing = logTaskQueueProcessing;
+            this.logRedstoneTrace = logRedstoneTrace;
         }
 
         static LoggingOptions fromConfig(final RutheniumConfig config) {
@@ -1838,7 +2080,8 @@ public final class TickRegionScheduler {
                 validated.logging.schedulerLogFallbacks,
                 validated.logging.schedulerLogFallbackStackTraces,
                 validated.logging.schedulerLogRegionSummaries,
-                validated.logging.schedulerLogTaskQueueProcessing
+                validated.logging.schedulerLogTaskQueueProcessing,
+                validated.logging.schedulerLogRedstoneTrace
             );
         }
 
@@ -1857,6 +2100,10 @@ public final class TickRegionScheduler {
 
         boolean logTaskQueueProcessing() {
             return this.logTaskQueueProcessing;
+        }
+
+        boolean logRedstoneTrace() {
+            return this.logRedstoneTrace;
         }
     }
 }
