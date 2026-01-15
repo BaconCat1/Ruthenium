@@ -82,8 +82,9 @@ public abstract class MinecraftServerMixin {
             }
         }
 
-        // Check if vanilla tick is allowed
-        if (!MainThreadTickGuard.guardWorldTick(world)) {
+        // If regions are active for this world, skip vanilla tick - scheduler owns ticking.
+        // This is expected orchestration behavior, not a violation.
+        if (scheduler.hasActiveRegions(world) && !scheduler.isHalted()) {
             return;
         }
 

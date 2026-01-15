@@ -99,15 +99,13 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             return;
         }
 
-        // Assert that if we're on the main thread, we should be orchestrating only
+        // If regions are already active from a previous tick, the scheduler owns the tick loop.
+        // Silently cancel this vanilla tick entry - this is expected behavior, not a violation.
         if (MainThreadTickGuard.isMainThread()) {
-            // Main thread should only be orchestrating - check if regions are active
             if (scheduler.hasActiveRegions(world) && !scheduler.isHalted() && !scheduler.isGracefulDegradationActiveForWorld(world)) {
-                // Regions are active - main thread should not be ticking directly
-                if (!MainThreadTickGuard.guardWorldTick(world)) {
-                    ci.cancel();
-                    return;
-                }
+                // Regions are active - scheduler handles ticking, just cancel without violation
+                ci.cancel();
+                return;
             }
         }
 
