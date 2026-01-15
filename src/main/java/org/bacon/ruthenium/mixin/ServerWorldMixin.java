@@ -99,15 +99,9 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             return;
         }
 
-        // If regions are already active from a previous tick, the scheduler owns the tick loop.
-        // Silently cancel this vanilla tick entry - this is expected behavior, not a violation.
-        if (MainThreadTickGuard.isMainThread()) {
-            if (scheduler.hasActiveRegions(world) && !scheduler.isHalted() && !scheduler.isGracefulDegradationActiveForWorld(world)) {
-                // Regions are active - scheduler handles ticking, just cancel without violation
-                ci.cancel();
-                return;
-            }
-        }
+        // NOTE: We must ALWAYS proceed to call scheduler.tickWorld() even if regions are active,
+        // because tickWorld() runs populateChunkState() which refreshes which chunks should be ticked.
+        // The cancel logic AFTER tickWorld() handles blocking vanilla tick properly.
 
         RegionDebug.onWorldTick(world);
         this.ruthenium$skipVanillaChunkTick = false;

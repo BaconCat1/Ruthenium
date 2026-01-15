@@ -82,12 +82,8 @@ public abstract class MinecraftServerMixin {
             }
         }
 
-        // If regions are active for this world, skip vanilla tick - scheduler owns ticking.
-        // This is expected orchestration behavior, not a violation.
-        if (scheduler.hasActiveRegions(world) && !scheduler.isHalted()) {
-            return;
-        }
-
+        // Always proceed with world tick - ServerWorldMixin will handle orchestration
+        // via scheduler.tickWorld() which properly updates chunk state and manages regions.
         // Proceed with world tick (which will invoke scheduler.tickWorld() via mixin)
         world.tick(shouldKeepTicking);
 
