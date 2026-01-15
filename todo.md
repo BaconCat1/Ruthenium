@@ -77,8 +77,8 @@
     - [x] Force-save all dirty chunks across all regions
     - [x] Save level data (world border, game rules, time, weather)
     - [x] Integrate with server watchdog for escalation on hang
-  - [ ] Add scheduler failure detection and auto-recovery
-  - [ ] Implement graceful degradation (fallback to main thread on critical failure)
+  - [x] Add scheduler failure detection and auto-recovery
+  - [x] Implement graceful degradation (fallback to main thread on critical failure)
 
 ### 2. Complete RegionizedWorldData - World State Decoupling
 - [x] **Finish world data holder implementation**
@@ -100,25 +100,25 @@
   - [x] Ensure chunk ticket updates are processed (Moonrise parity).
 
 ### 3. Eliminate Main Thread Ticking Paths
-- [ ] **Audit and block all vanilla tick entry points**
-  - [ ] Add assertions in `ServerWorld.tick()` to fail if regions are active
-  - [ ] Add assertions in `ServerChunkManager.tick()` for region-owned chunks
-  - [ ] Block `World.tickEntity()` when entity is region-owned
-  - [ ] Block `World.tickBlockEntities()` when chunks are region-owned
-  - [ ] Add logging when any vanilla tick method is called inappropriately
+- [x] **Audit and block all vanilla tick entry points**
+  - [x] Add assertions in `ServerWorld.tick()` to fail if regions are active
+  - [x] Add assertions in `ServerChunkManager.tick()` for region-owned chunks
+  - [x] Block `World.tickEntity()` when entity is region-owned
+  - [x] Block `World.tickBlockEntities()` when chunks are region-owned
+  - [x] Add logging when any vanilla tick method is called inappropriately
 
-- [ ] **Force scheduler orchestration only**
-  - [ ] Ensure `MinecraftServer.tickWorlds()` ONLY calls `TickRegionScheduler.tickWorld()`
-  - [ ] Remove or guard all vanilla ticking fallbacks
-  - [ ] Make fallback behavior explicitly opt-in via system property
-  - [ ] Add metrics for vanilla fallback frequency (should be zero in production)
+- [x] **Force scheduler orchestration only**
+  - [x] Ensure `MinecraftServer.tickWorlds()` ONLY calls `TickRegionScheduler.tickWorld()`
+  - [x] Remove or guard all vanilla ticking fallbacks
+  - [x] Make fallback behavior explicitly opt-in via system property
+  - [x] Add metrics for vanilla fallback frequency (should be zero in production)
 
-- [ ] **Validate main thread responsibilities**
-  - [ ] Main thread ONLY orchestrates scheduler
-  - [ ] Main thread ONLY ticks global services (weather, time, raids at world level)
-  - [ ] Main thread ONLY handles chunk loading/unloading coordination
-  - [ ] Main thread NEVER directly ticks chunks/entities/blocks
-  - [ ] Add thread assertions to verify these constraints
+- [x] **Validate main thread responsibilities**
+  - [x] Main thread ONLY orchestrates scheduler
+  - [x] Main thread ONLY ticks global services (weather, time, raids at world level)
+  - [x] Main thread ONLY handles chunk loading/unloading coordination
+  - [x] Main thread NEVER directly ticks chunks/entities/blocks
+  - [x] Add thread assertions to verify these constraints
 
 ### 4. Thread Ownership & Synchronization
 - [x] **Port thread ownership validation**
@@ -141,20 +141,20 @@
   - [ ] Validate command execution context (ensure proper region scheduling)
 
 ### 5. Per-Region Networking
-- [ ] **Implement region-local connection management**
-  - [ ] Port per-region network tick loop from Folia
-  - [ ] Move player connection ticking to region threads
-  - [ ] Implement per-region packet broadcast queue
-  - [ ] Handle player disconnect from region thread context
-  - [ ] Integrate with Fabric network events (packet send/receive)
-  - [ ] Implement cross-region packet routing for entity tracking
+- [x] **Implement region-local connection management**
+  - [x] Port per-region network tick loop from Folia
+  - [x] Move player connection ticking to region threads
+  - [x] Implement per-region packet broadcast queue
+  - [x] Handle player disconnect from region thread context
+  - [x] Integrate with Fabric network events (packet send/receive)
+  - [x] Implement cross-region packet routing for entity tracking
 
-- [ ] **Handle player movement across regions**
-  - [ ] Detect when player crosses region boundary
-  - [ ] Queue connection transfer to target region thread
-  - [ ] Migrate player state (inventory, effects, statistics)
-  - [ ] Update entity tracking for region transition
-  - [ ] Handle client-side chunk loading during transfer
+- [x] **Handle player movement across regions**
+  - [x] Detect when player crosses region boundary
+  - [x] Queue connection transfer to target region thread
+  - [x] Migrate player state (inventory, effects, statistics)
+  - [x] Update entity tracking for region transition
+  - [x] Handle client-side chunk loading during transfer
 
 ### 6. Cross-Region Operations
 - [ ] **Implement TeleportUtils for entity movement**

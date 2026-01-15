@@ -48,17 +48,18 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
     @Shadow private int currentTime;
 
     /**
-     * Shadowed persistence hook from the vanilla raid manager.
-     */
-    @Shadow protected abstract void markDirty();
-
-    /**
      * Shadowed raid factory, invoked to obtain or create a raid centered on the supplied position.
      */
     @Shadow protected abstract Raid getOrCreateRaid(ServerWorld world, BlockPos pos);
 
     @Unique
     private final AtomicInteger ruthenium$nextAvailable = new AtomicInteger();
+
+    @Unique
+    @SuppressWarnings("ConstantConditions")
+    private RaidManager ruthenium$self() {
+        return (RaidManager)(Object)this;
+    }
 
     @Unique
     private static Int2ObjectMap<Raid> ruthenium$wrap(final Int2ObjectMap<Raid> source) {
@@ -87,13 +88,15 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
     public void ruthenium$globalTick() {
         this.currentTime++;
         if (this.currentTime % 200 == 0) {
-            this.markDirty();
+            this.ruthenium$self().setDirty(true);
         }
     }
 
     /**
      * Locates the raid identifier associated with the provided raid instance.
      *
+     * @author Ruthenium
+     * @reason Thread-safe raid ID lookup
      * @param raid raid whose identifier should be resolved
      * @return identifier or empty when the raid is not tracked
      */
@@ -115,6 +118,8 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
      * Ticks active raids, skipping those owned by other region threads and cleaning up completed
      * raids in a thread-safe manner.
      *
+     * @author Ruthenium
+     * @reason Region-aware raid ticking
      * @param world world executing the raid update
      */
     @Overwrite
@@ -132,7 +137,7 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
                 }
                 if (raid.hasStopped()) {
                     iterator.remove();
-                    this.markDirty();
+                    this.ruthenium$self().setDirty(true);
                     continue;
                 }
                 raid.tick(world);
@@ -144,8 +149,8 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
      * Starts a raid centered at the supplied position when the current region thread owns all
      * relevant chunks and players.
      *
-     * @param player player triggering the raid
-     * @param pos    raid origin position
+     * @author Ruthenium
+     * @reason Region-aware raid starting
      * @return raid instance or {@code null} when the raid could not start
      */
     @Overwrite
@@ -189,15 +194,15 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
         if (!raid.hasStarted() || raid.getBadOmenLevel() < raid.getMaxAcceptableBadOmenLevel()) {
             raid.start(player);
         }
-        this.markDirty();
+        this.ruthenium$self().setDirty(true);
         return raid;
     }
-
-    // shadow present earlier in the file; do not duplicate
 
     /**
      * Provides thread-safe raid identifiers by backing the vanilla counter with an atomic integer.
      *
+     * @author Ruthenium
+     * @reason Thread-safe ID generation
      * @return next raid identifier
      */
     @Overwrite
@@ -210,6 +215,8 @@ public abstract class RaidManagerMixin implements RaidManagerThreadSafe {
     /**
      * Retrieves the closest raid to the supplied position, respecting region ownership checks.
      *
+     * @author Ruthenium
+     * @reason Thread-safe raid lookup
      * @param pos            search origin
      * @param searchDistance maximum squared distance to consider
      * @return raid instance or {@code null} when none are close enough

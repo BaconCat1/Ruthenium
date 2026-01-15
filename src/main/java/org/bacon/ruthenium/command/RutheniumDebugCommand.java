@@ -16,8 +16,13 @@ import net.minecraft.text.Text;
 import org.bacon.ruthenium.Ruthenium;
 import org.bacon.ruthenium.config.RutheniumConfig;
 import org.bacon.ruthenium.config.RutheniumConfigManager;
+import org.bacon.ruthenium.world.MainThreadTickGuard;
 import org.bacon.ruthenium.world.RegionTickMonitor;
+import org.bacon.ruthenium.world.RegionizedServerWorld;
+import org.bacon.ruthenium.world.RegionizedWorldData;
 import org.bacon.ruthenium.world.TickRegionScheduler;
+import org.bacon.ruthenium.world.network.PlayerRegionTransferHandler;
+import org.bacon.ruthenium.world.network.RegionNetworkManager;
 
 import static net.minecraft.server.command.CommandManager.literal;
 
@@ -36,6 +41,8 @@ public final class RutheniumDebugCommand {
             .then(literal("threaddump").executes(ctx -> executeThreadDump(ctx.getSource())))
             .then(literal("memorymapdump").executes(ctx -> executeMemoryDump(ctx.getSource())))
             .then(literal("tickreport").executes(ctx -> executeTickReport(ctx.getSource())))
+            .then(literal("failuredump").executes(ctx -> executeFailureDump(ctx.getSource())))
+            .then(literal("tickguarddump").executes(ctx -> executeTickGuardDump(ctx.getSource())))
             .then(literal("config")
                 .then(literal("path").executes(ctx -> executeConfigPath(ctx.getSource())))
                 .then(literal("reload").executes(ctx -> executeConfigReload(ctx.getSource())))
@@ -101,6 +108,64 @@ public final class RutheniumDebugCommand {
             source.sendFeedback(() -> Text.literal("Region tick report written to console."), false);
         }
         return report.size();
+    }
+
+    private static int executeFailureDump(final ServerCommandSource source) {
+        final String report = TickRegionScheduler.getInstance().getFailureHandler().buildDiagnosticReport();
+        for (final String line : report.split("\n")) {
+            Ruthenium.getLogger().info("[ruthenium failure] {}", line);
+        }
+        final boolean gracefulDegradation = TickRegionScheduler.getInstance().isGracefulDegradationActive();
+        source.sendFeedback(() -> Text.literal("Failure handler diagnostics written to console."), false);
+        source.sendFeedback(() -> Text.literal("Graceful Degradation Active: " + gracefulDegradation), false);
+        return 1;
+    }
+
+    private static int executeTickGuardDump(final ServerCommandSource source) {
+        final String report = MainThreadTickGuard.buildMetricsReport();
+        for (final String line : report.split("\n")) {
+            Ruthenium.getLogger().info("[ruthenium tickguard] {}", line);
+        }
+        final MainThreadTickGuard.TickMetrics metrics = MainThreadTickGuard.getMetrics();
+        source.sendFeedback(() -> Text.literal("Tick guard metrics written to console."), false);
+        source.sendFeedback(() -> Text.literal("Total Violations: " + metrics.totalViolations() +
+            " (should be 0 in production)"), false);
+        if (metrics.hasViolations()) {
+            source.sendFeedback(() -> Text.literal("WARNING: Vanilla tick paths detected while regions active!"), false);
+        }
+        return 1;
+    }
+
+    private static int executeNetworkDump(final ServerCommandSource source) {
+        final net.minecraft.server.MinecraftServer server = source.getServer();
+        source.sendFeedback(() -> Text.literal("=== Per-Region Network Metrics ==="), false);
+
+        int totalPendingTransfers = org.bacon.ruthenium.world.network.PlayerRegionTransferHandler.getPendingTransferCount();
+        source.sendFeedback(() -> Text.literal("Pending Player Transfers: " + totalPendingTransfers), false);
+
+        for (final net.minecraft.server.world.ServerWorld world : server.getWorlds()) {
+            if (world instanceof org.bacon.ruthenium.world.RegionizedServerWorld regionized) {
+                final org.bacon.ruthenium.world.RegionizedWorldData worldData = regionized.ruthenium$getWorldRegionData();
+                final org.bacon.ruthenium.world.network.RegionNetworkManager networkManager = worldData.getNetworkManager();
+                final org.bacon.ruthenium.world.network.RegionNetworkManager.NetworkMetrics metrics = networkManager.getMetrics();
+
+                final String worldName = world.getRegistryKey().getValue().toString();
+                Ruthenium.getLogger().info("[ruthenium network] World: {}", worldName);
+                Ruthenium.getLogger().info("[ruthenium network]   Packets Processed: {}", metrics.packetsProcessed());
+                Ruthenium.getLogger().info("[ruthenium network]   Region Transfers: {}", metrics.regionTransfers());
+                Ruthenium.getLogger().info("[ruthenium network]   Cross-Region Packets: {}", metrics.crossRegionPackets());
+                Ruthenium.getLogger().info("[ruthenium network]   Pending Packet Queues: {}", metrics.pendingPacketQueues());
+                Ruthenium.getLogger().info("[ruthenium network]   Pending Transfers: {}", metrics.pendingTransfers());
+                Ruthenium.getLogger().info("[ruthenium network]   Pending Disconnects: {}", metrics.pendingDisconnects());
+
+                source.sendFeedback(() -> Text.literal("World " + worldName + ": " +
+                    metrics.packetsProcessed() + " packets, " +
+                    metrics.regionTransfers() + " transfers"), false);
+            }
+        }
+
+        source.sendFeedback(() -> Text.literal("Network metrics written to console."), false);
+        return 1;
     }
 
     private static long toMiB(final long bytes) {

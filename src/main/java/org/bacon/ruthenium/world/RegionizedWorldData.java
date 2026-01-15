@@ -41,6 +41,7 @@ import org.bacon.ruthenium.mixin.accessor.ServerChunkLoadingManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerChunkManagerAccessor;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
 import org.bacon.ruthenium.util.CoordinateUtil;
+import org.bacon.ruthenium.world.network.RegionNetworkManager;
 import org.bacon.ruthenium.world.raid.RaidManagerThreadSafe;
 
 /**
@@ -111,6 +112,11 @@ public class RegionizedWorldData {
     private final AtomicInteger activeRegionThreads = new AtomicInteger(0);
 
     /**
+     * Per-region network manager for handling player connections and packet broadcasting.
+     */
+    private final RegionNetworkManager networkManager;
+
+    /**
      * Creates a new world data wrapper for the supplied world.
      *
      * @param world backing server world
@@ -122,6 +128,7 @@ public class RegionizedWorldData {
         this.spawnChunkTracker = new PositionCountingAreaMap<>();
         this.narrowSpawnChunkTracker = new PositionCountingAreaMap<>();
         this.budgetWarningTicks.defaultReturnValue(Long.MIN_VALUE);
+        this.networkManager = new RegionNetworkManager(world);
     }
 
     /**
@@ -462,13 +469,17 @@ public class RegionizedWorldData {
     }
 
     private void tickConnections() {
-        final List<ServerPlayerEntity> players = List.copyOf(this.players); // avoids CME when handlers disconnect players
-        for (final ServerPlayerEntity player : players) {
-            final ServerPlayNetworkHandler networkHandler = player.networkHandler;
-            if (networkHandler != null) {
-                networkHandler.tick();
-            }
-        }
+        // Use the network manager for connection ticking - it handles packet queuing and disconnect processing
+        this.networkManager.tickRegionConnections(this);
+        this.networkManager.processPendingDisconnects(this);
+        this.networkManager.processPendingTransfers(this);
+    }
+
+    /**
+     * Returns the network manager for this world data.
+     */
+    public RegionNetworkManager getNetworkManager() {
+        return this.networkManager;
     }
 
     public void addPlayer(final ServerPlayerEntity player) {

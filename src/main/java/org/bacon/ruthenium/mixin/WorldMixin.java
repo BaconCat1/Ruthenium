@@ -13,6 +13,7 @@ import net.minecraft.world.World;
 import net.minecraft.world.block.WireOrientation;
 import net.minecraft.world.chunk.BlockEntityTickInvoker;
 import org.bacon.ruthenium.debug.FallbackValidator;
+import org.bacon.ruthenium.world.MainThreadTickGuard;
 import org.bacon.ruthenium.world.RegionTaskDispatcher;
 import org.bacon.ruthenium.world.RegionizedServer;
 import org.bacon.ruthenium.world.RegionizedServerWorld;
@@ -87,6 +88,7 @@ public abstract class WorldMixin {
 
     /**
      * Redirects tickBlockEntities to use region data when on a region thread.
+     * Block entity ticking MUST happen on region threads when regions are active.
      */
     @Inject(method = "tickBlockEntities", at = @At("HEAD"), cancellable = true)
     private void ruthenium$redirectTickBlockEntities(final CallbackInfo ci) {
@@ -101,8 +103,13 @@ public abstract class WorldMixin {
 
         // Validate that we're on the correct thread
         if (!RegionizedServer.isOnRegionThread()) {
+            // Use MainThreadTickGuard to validate and potentially block
+            if (!MainThreadTickGuard.guardBlockEntityTick(serverWorld)) {
+                ci.cancel();
+                return;
+            }
             FallbackValidator.validateBlockEntityTicking(serverWorld);
-            return; // Fall back to vanilla if not on region thread
+            return; // Fall back to vanilla if allowed
         }
 
         final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();

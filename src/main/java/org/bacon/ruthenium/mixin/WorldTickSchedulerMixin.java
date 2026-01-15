@@ -58,6 +58,9 @@ public abstract class WorldTickSchedulerMixin<T> {
     /**
      * Region threads can schedule ticks concurrently with the orchestrator draining schedulers.
      * Vanilla's WorldTickScheduler is not thread-safe, so serialize access.
+     *
+     * @author Ruthenium
+     * @reason Thread-safe tick scheduling for region threading
      */
     @Overwrite
     public void scheduleTick(final OrderedTick<T> orderedTick) {
@@ -87,6 +90,12 @@ public abstract class WorldTickSchedulerMixin<T> {
         }
     }
 
+    /**
+     * Thread-safe chunk tick scheduler registration.
+     *
+     * @author Ruthenium
+     * @reason Thread-safe scheduler management for region threading
+     */
     @Overwrite
     public void addChunkTickScheduler(final ChunkPos pos, final ChunkTickScheduler<T> scheduler) {
         synchronized (this) {
@@ -100,6 +109,12 @@ public abstract class WorldTickSchedulerMixin<T> {
         }
     }
 
+    /**
+     * Thread-safe chunk tick scheduler removal.
+     *
+     * @author Ruthenium
+     * @reason Thread-safe scheduler management for region threading
+     */
     @Overwrite
     public void removeChunkTickScheduler(final ChunkPos pos) {
         synchronized (this) {
@@ -114,6 +129,9 @@ public abstract class WorldTickSchedulerMixin<T> {
 
     /**
      * Serialize the drain path to avoid concurrent mutation of internal queues/maps.
+     *
+     * @author Ruthenium
+     * @reason Thread-safe tick processing for region threading
      */
     @Overwrite
     public void tick(final long time, final int maxTicks, final BiConsumer<BlockPos, T> ticker) {

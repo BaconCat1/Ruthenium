@@ -17,6 +17,7 @@ import org.bacon.ruthenium.debug.RegionDebug;
 import org.bacon.ruthenium.region.RegionTickData;
 import org.bacon.ruthenium.region.ThreadedRegionizer;
 import org.bacon.ruthenium.mixin.accessor.ServerWorldAccessor;
+import org.bacon.ruthenium.world.MainThreadTickGuard;
 import org.bacon.ruthenium.world.RegionTaskDispatcher;
 import org.bacon.ruthenium.world.RegionChunkTickAccess;
 import org.bacon.ruthenium.world.RegionizedServer;
@@ -98,6 +99,18 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             return;
         }
 
+        // Assert that if we're on the main thread, we should be orchestrating only
+        if (MainThreadTickGuard.isMainThread()) {
+            // Main thread should only be orchestrating - check if regions are active
+            if (scheduler.hasActiveRegions(world) && !scheduler.isHalted() && !scheduler.isGracefulDegradationActiveForWorld(world)) {
+                // Regions are active - main thread should not be ticking directly
+                if (!MainThreadTickGuard.guardWorldTick(world)) {
+                    ci.cancel();
+                    return;
+                }
+            }
+        }
+
         RegionDebug.onWorldTick(world);
         this.ruthenium$skipVanillaChunkTick = false;
         final boolean replaced = scheduler.tickWorld(world, shouldKeepTicking);
@@ -125,8 +138,13 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
 
     @Inject(method = "tick", at = @At(value = "INVOKE",
         target = "Lnet/minecraft/world/tick/WorldTickScheduler;tick(JILjava/util/function/BiConsumer;)V",
-        ordinal = 0))
+        ordinal = 0), cancellable = true)
     private void ruthenium$validateScheduledTicksFallback(final BooleanSupplier shouldKeepTicking, final CallbackInfo ci) {
+        // Use MainThreadTickGuard to validate and potentially block scheduled tick processing
+        if (!MainThreadTickGuard.guardScheduledTick(this.ruthenium$self())) {
+            ci.cancel();
+            return;
+        }
         FallbackValidator.validateScheduledTickProcessing(this.ruthenium$self());
     }
 
@@ -194,6 +212,17 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
             ci.cancel();
             return;
         }
+
+        // Guard against main thread chunk ticking when regions are active
+        if (!onRegionThread && depth == 0) {
+            final int chunkX = chunk.getPos().x;
+            final int chunkZ = chunk.getPos().z;
+            if (!MainThreadTickGuard.guardChunkTick(this.ruthenium$self(), chunkX, chunkZ)) {
+                ci.cancel();
+                return;
+            }
+        }
+
         this.ruthenium$regionChunkDepth.set(depth + 1);
     }
 
@@ -282,8 +311,13 @@ public abstract class ServerWorldMixin implements RegionizedServerWorld, RegionC
     private void ruthenium$redirectProcessBlockEvents(final CallbackInfo ci) {
         // Validate that we're on the correct thread
         if (!RegionizedServer.isOnRegionThread()) {
+            // Use MainThreadTickGuard to validate and potentially block
+            if (!MainThreadTickGuard.guardBlockEventProcessing(this.ruthenium$self())) {
+                ci.cancel();
+                return;
+            }
             FallbackValidator.validateBlockEventProcessing(this.ruthenium$self());
-            return; // Fall back to vanilla if not on region thread
+            return; // Fall back to vanilla if allowed
         }
 
         final RegionizedWorldData worldData = TickRegionScheduler.getCurrentWorldData();

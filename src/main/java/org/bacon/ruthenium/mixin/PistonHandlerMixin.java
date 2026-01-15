@@ -23,8 +23,7 @@ public abstract class PistonHandlerMixin {
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/world/World;getBlockState(Lnet/minecraft/util/math/BlockPos;)Lnet/minecraft/block/BlockState;"
-            ),
-            require = 0
+            )
     )
     private BlockState ruthenium$guardPistonHandlerGetBlockState(final World world,
                                                                  final BlockPos pos,

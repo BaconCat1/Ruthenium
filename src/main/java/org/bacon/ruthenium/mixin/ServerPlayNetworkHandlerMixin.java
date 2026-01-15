@@ -17,6 +17,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import org.bacon.ruthenium.world.RegionTaskDispatcher;
 import org.bacon.ruthenium.world.RegionThreadUtil;
+import org.bacon.ruthenium.world.network.PlayerRegionTransferHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -168,5 +169,13 @@ public abstract class ServerPlayNetworkHandlerMixin {
         if (!RegionThreadUtil.isRegionThreadFor(world)) {
             NetworkThreadUtils.forceMainThread(packet, handler, world);
         }
+    }
+
+    /**
+     * Handle player disconnect to clean up any pending region transfer state.
+     */
+    @Inject(method = "onDisconnected", at = @At("HEAD"))
+    private void ruthenium$handleDisconnect(final CallbackInfo ci) {
+        PlayerRegionTransferHandler.handleDisconnectDuringTransfer(this.player);
     }
 }

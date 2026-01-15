@@ -108,6 +108,7 @@ public final class TickRegionScheduler {
     private final AtomicBoolean halted = new AtomicBoolean();
     private final RegionWatchdog watchdog;
     private final AtomicReference<MinecraftServer> serverRef = new AtomicReference<>();
+    private final SchedulerFailureHandler failureHandler;
 
     private volatile LoggingOptions loggingOptions;
     private volatile boolean verboseLogging;
@@ -168,6 +169,7 @@ public final class TickRegionScheduler {
         this.regionTickStallMillis = TimeUnit.NANOSECONDS.toMillis(this.regionTickStallNanos);
 
         this.scheduler = new SchedulerThreadPool(targetThreads, threadFactory);
+        this.failureHandler = new SchedulerFailureHandler(this);
         this.watchdog = new RegionWatchdog(
             watchdogWarnNanos,
             watchdogCrashNanos,
@@ -217,6 +219,28 @@ public final class TickRegionScheduler {
 
     public boolean isVerboseLogging() {
         return this.verboseLogging;
+    }
+
+    /**
+     * Returns the failure handler for this scheduler.
+     */
+    public SchedulerFailureHandler getFailureHandler() {
+        return this.failureHandler;
+    }
+
+    /**
+     * Returns whether graceful degradation is active, meaning the scheduler
+     * should fall back to main-thread ticking for one or more worlds.
+     */
+    public boolean isGracefulDegradationActive() {
+        return this.failureHandler.isGracefulDegradationActive();
+    }
+
+    /**
+     * Returns whether graceful degradation is active for a specific world.
+     */
+    public boolean isGracefulDegradationActiveForWorld(final ServerWorld world) {
+        return this.failureHandler.isGracefulDegradationActiveForWorld(world);
     }
 
     public static void applyConfigIfStarted(final RutheniumConfig config) {
@@ -553,6 +577,23 @@ public final class TickRegionScheduler {
                 LOGGER.warn("Region {} in {} has not ticked for {}ms (chunks={}, scheduledStart={}, isMarkedNonSchedulable={})",
                     region.id, describeWorld(world), ageMillis, region.getOwnedChunkCount(),
                     scheduledStart, handle.isMarkedNonSchedulable());
+
+                // Use failure handler to attempt auto-recovery for stalled regions
+                final SchedulerFailureHandler.RecoveryAction action =
+                    this.failureHandler.handleStalledRegion(world, region.id, ageMillis);
+                if (action == SchedulerFailureHandler.RecoveryAction.ATTEMPT_RESCHEDULE
+                    || action == SchedulerFailureHandler.RecoveryAction.FORCE_RESCHEDULE) {
+                    LOGGER.info("Attempting auto-recovery for stalled region {} (action={})", region.id, action);
+                    try {
+                        handle.prepareForActivation();
+                        this.scheduler.notifyTasks(handle);
+                    } catch (final Throwable recoveryError) {
+                        LOGGER.error("Failed to recover stalled region {}", region.id, recoveryError);
+                    }
+                } else if (action == SchedulerFailureHandler.RecoveryAction.GRACEFUL_DEGRADATION) {
+                    this.failureHandler.activateGracefulDegradation(world,
+                        "Region " + region.id + " stalled for " + ageMillis + "ms");
+                }
             } else if (!handle.hasScheduledDeadline()) {
                 stalledRegions.add(region.id);
                 if (this.verboseLogging) {
